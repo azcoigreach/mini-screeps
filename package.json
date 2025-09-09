@@ -1,0 +1,13 @@
+{
+  "name": "mini-screeps-bot",
+  "version": "1.0.0",
+  "description": "A fast-growing Screeps bot that automatically builds bases, harvests energy, expands to adjacent rooms, and defends itself",
+  "main": "main.js",
+  "scripts": {
+    "build": "node main.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": ["screeps", "bot", "automation", "gaming"],
+  "author": "azcoigreach",
+  "license": "MIT"
+}
