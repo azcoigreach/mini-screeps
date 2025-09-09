@@ -1,6 +1,7 @@
 // Mini Screeps Bot - Fast Growing Room Controller Bot
 // Main entry point for the Screeps bot
 
+const config = require('config');
 const roleHarvester = require('role.harvester');
 const roleUpgrader = require('role.upgrader');
 const roleBuilder = require('role.builder');
@@ -14,10 +15,12 @@ const memoryManager = require('memory.manager');
 const expansionManager = require('expansion.manager');
 
 module.exports.loop = function () {
-    console.log('=== Tick ' + Game.time + ' ===');
+    if (config.performance.logLevel === 'debug' || config.performance.logLevel === 'info') {
+        console.log('=== Tick ' + Game.time + ' ===');
+    }
     
-    // Clean up memory every 1000 ticks
-    if (Game.time % 1000 === 0) {
+    // Clean up memory every configured interval
+    if (Game.time % config.memory.cleanupInterval === 0) {
         memoryManager.cleanup();
     }
     
@@ -26,7 +29,9 @@ module.exports.loop = function () {
         const room = Game.rooms[roomName];
         
         if (room.controller && room.controller.my) {
-            console.log('Managing room:', roomName, 'RCL:', room.controller.level);
+            if (config.performance.logLevel === 'debug' || config.performance.logLevel === 'info') {
+                console.log('Managing room:', roomName, 'RCL:', room.controller.level);
+            }
             
             // Manage room operations
             roomManager.run(room);
@@ -82,27 +87,33 @@ module.exports.loop = function () {
             
             for (let tower of towers) {
                 // Defend against hostiles
-                const closestHostile = tower.pos.findClosestByRange(FIND_HOSTILE_CREEPS);
-                if (closestHostile) {
-                    tower.attack(closestHostile);
-                    continue;
+                if (config.defense.towerAutoAttack) {
+                    const closestHostile = tower.pos.findClosestByRange(FIND_HOSTILE_CREEPS);
+                    if (closestHostile) {
+                        tower.attack(closestHostile);
+                        continue;
+                    }
                 }
                 
                 // Heal damaged creeps
-                const closestDamagedCreep = tower.pos.findClosestByRange(FIND_MY_CREEPS, {
-                    filter: (creep) => creep.hits < creep.hitsMax
-                });
-                if (closestDamagedCreep) {
-                    tower.heal(closestDamagedCreep);
-                    continue;
+                if (config.defense.towerAutoHeal) {
+                    const closestDamagedCreep = tower.pos.findClosestByRange(FIND_MY_CREEPS, {
+                        filter: (creep) => creep.hits < creep.hitsMax
+                    });
+                    if (closestDamagedCreep) {
+                        tower.heal(closestDamagedCreep);
+                        continue;
+                    }
                 }
                 
                 // Repair damaged structures
-                const closestDamagedStructure = tower.pos.findClosestByRange(FIND_STRUCTURES, {
-                    filter: (structure) => structure.hits < structure.hitsMax && structure.structureType !== STRUCTURE_WALL
-                });
-                if (closestDamagedStructure && tower.store[RESOURCE_ENERGY] > 500) {
-                    tower.repair(closestDamagedStructure);
+                if (config.defense.towerAutoRepair) {
+                    const closestDamagedStructure = tower.pos.findClosestByRange(FIND_STRUCTURES, {
+                        filter: (structure) => structure.hits < structure.hitsMax && structure.structureType !== STRUCTURE_WALL
+                    });
+                    if (closestDamagedStructure && tower.store[RESOURCE_ENERGY] > config.energy.towerReserve) {
+                        tower.repair(closestDamagedStructure);
+                    }
                 }
             }
         }
