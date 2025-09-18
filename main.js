@@ -24,11 +24,17 @@
  */
 
 module.exports.loop = function () {
-    // Clean up memory
-    for (const name in Memory.creeps) {
-        if (!Game.creeps[name]) {
-            delete Memory.creeps[name];
+    // Clean up memory with error handling
+    try {
+        for (const name in Memory.creeps) {
+            if (!Game.creeps[name]) {
+                delete Memory.creeps[name];
+            }
         }
+    } catch (error) {
+        console.log('Memory cleanup error:', error);
+        // Reset memory if corrupted
+        Memory.creeps = {};
     }
 
     // Get the spawn and room
@@ -40,6 +46,7 @@ module.exports.loop = function () {
     
     // Count creeps by role
     const creeps = {
+        harvester: _.filter(Game.creeps, creep => creep.memory.role === 'harvester'),
         miner: _.filter(Game.creeps, creep => creep.memory.role === 'miner'),
         hauler: _.filter(Game.creeps, creep => creep.memory.role === 'hauler'),
         upgrader: _.filter(Game.creeps, creep => creep.memory.role === 'upgrader'),
@@ -48,14 +55,22 @@ module.exports.loop = function () {
 
     // Plan base layout if not done
     if (!room.memory.basePlanned) {
-        planBase(room);
-        room.memory.basePlanned = true;
+        try {
+            planBase(room);
+            room.memory.basePlanned = true;
+        } catch (error) {
+            console.log('Base planning error:', error);
+        }
     }
 
     // Calculate and cache distances for throughput optimization
     if (!room.memory.distancesCalculated) {
-        calculateDistances(room);
-        room.memory.distancesCalculated = true;
+        try {
+            calculateDistances(room);
+            room.memory.distancesCalculated = true;
+        } catch (error) {
+            console.log('Distance calculation error:', error);
+        }
     }
 
     // Spawn creeps based on needs
@@ -296,8 +311,35 @@ function spawnCreeps(spawn, creeps) {
     
     // Get throughput data
     const throughput = room.memory.throughput;
-    if (!throughput) {
-        console.log('Throughput data not available, using basic spawn logic');
+    
+    // Early game bootstrapping: if we don't have throughput data or essential infrastructure
+    const hasSourceContainers = room.find(FIND_STRUCTURES, {
+        filter: s => s.structureType === STRUCTURE_CONTAINER && 
+                     room.find(FIND_SOURCES).some(source => source.pos.getRangeTo(s) <= 2)
+    }).length > 0;
+    
+    if (!throughput || !hasSourceContainers || energyCapacity < 550) {
+        // Bootstrap phase: spawn simple harvesters until we have infrastructure
+        const bootstrapNeeds = {
+            harvester: Math.max(1, Math.min(3, Math.floor(energyCapacity / 200))), // Basic harvesters
+            upgrader: Math.max(1, Math.floor(energyCapacity / 600)), // Basic upgraders
+            builder: countMissingStructures(room) > 0 ? 1 : 0
+        };
+        
+        // Spawn bootstrap creeps
+        if (creeps.harvester.length < bootstrapNeeds.harvester && spawn.canCreateCreep([WORK, CARRY, MOVE]) === OK) {
+            const name = 'Harvester' + Game.time;
+            spawn.createCreep([WORK, CARRY, MOVE], name, { role: 'harvester' });
+            console.log('Spawning bootstrap harvester');
+        } else if (creeps.upgrader.length < bootstrapNeeds.upgrader && spawn.canCreateCreep([WORK, CARRY, MOVE]) === OK) {
+            const name = 'Upgrader' + Game.time;
+            spawn.createCreep([WORK, CARRY, MOVE], name, { role: 'upgrader' });
+            console.log('Spawning bootstrap upgrader');
+        } else if (creeps.builder.length < bootstrapNeeds.builder && spawn.canCreateCreep([WORK, CARRY, MOVE]) === OK) {
+            const name = 'Builder' + Game.time;
+            spawn.createCreep([WORK, CARRY, MOVE], name, { role: 'builder' });
+            console.log('Spawning bootstrap builder');
+        }
         return;
     }
     
@@ -372,6 +414,9 @@ function countMissingStructures(room) {
 
 function runCreep(creep) {
     switch (creep.memory.role) {
+        case 'harvester':
+            runHarvester(creep);
+            break;
         case 'miner':
             runMiner(creep);
             break;
@@ -384,6 +429,38 @@ function runCreep(creep) {
         case 'builder':
             runBuilder(creep);
             break;
+    }
+}
+
+function runHarvester(creep) {
+    // Bootstrap harvester: harvest and deliver energy to spawn/extensions
+    if (creep.store.getFreeCapacity() > 0) {
+        const source = creep.pos.findClosestByPath(FIND_SOURCES);
+        if (creep.harvest(source) === ERR_NOT_IN_RANGE) {
+            creep.moveTo(source, { visualizePathStyle: { stroke: '#ffaa00' } });
+        }
+    } else {
+        // Find spawn/extensions to deliver energy to
+        const targets = creep.room.find(FIND_STRUCTURES, {
+            filter: (structure) => {
+                return (structure.structureType === STRUCTURE_EXTENSION ||
+                        structure.structureType === STRUCTURE_SPAWN ||
+                        structure.structureType === STRUCTURE_TOWER) &&
+                       structure.store.getFreeCapacity(RESOURCE_ENERGY) > 0;
+            }
+        });
+
+        if (targets.length > 0) {
+            const target = creep.pos.findClosestByPath(targets);
+            if (creep.transfer(target, RESOURCE_ENERGY) === ERR_NOT_IN_RANGE) {
+                creep.moveTo(target, { visualizePathStyle: { stroke: '#ffffff' } });
+            }
+        } else {
+            // No space in structures, help upgrade controller
+            if (creep.upgradeController(creep.room.controller) === ERR_NOT_IN_RANGE) {
+                creep.moveTo(creep.room.controller, { visualizePathStyle: { stroke: '#ffffff' } });
+            }
+        }
     }
 }
 
@@ -502,18 +579,20 @@ function runUpgrader(creep) {
         // Get energy from spawn/extensions/storage (haulers deliver here)
         const targets = creep.room.find(FIND_STRUCTURES, {
             filter: (structure) => {
-                return (structure.structureType === STRUCTURE_SPAWN ||
-                        structure.structureType === STRUCTURE_EXTENSION ||
+                // Don't take energy from spawn if it has less than 300 energy (reserve for spawning)
+                if (structure.structureType === STRUCTURE_SPAWN) {
+                    return structure.store[RESOURCE_ENERGY] > 300;
+                }
+                return (structure.structureType === STRUCTURE_EXTENSION ||
                         structure.structureType === STRUCTURE_STORAGE) &&
                        structure.store[RESOURCE_ENERGY] > 0;
             }
         });
 
         if (targets.length > 0) {
-            // Prioritize extensions and spawn over storage
+            // Prioritize extensions over storage, but avoid spawn if possible
             const priorityTargets = targets.filter(t => 
-                t.structureType === STRUCTURE_EXTENSION || 
-                t.structureType === STRUCTURE_SPAWN
+                t.structureType === STRUCTURE_EXTENSION
             );
             
             const target = creep.pos.findClosestByPath(priorityTargets.length > 0 ? priorityTargets : targets);
@@ -543,18 +622,20 @@ function runBuilder(creep) {
         // Get energy from spawn/extensions/storage (haulers deliver here)
         const targets = creep.room.find(FIND_STRUCTURES, {
             filter: (structure) => {
-                return (structure.structureType === STRUCTURE_SPAWN ||
-                        structure.structureType === STRUCTURE_EXTENSION ||
+                // Don't take energy from spawn if it has less than 300 energy (reserve for spawning)
+                if (structure.structureType === STRUCTURE_SPAWN) {
+                    return structure.store[RESOURCE_ENERGY] > 300;
+                }
+                return (structure.structureType === STRUCTURE_EXTENSION ||
                         structure.structureType === STRUCTURE_STORAGE) &&
                        structure.store[RESOURCE_ENERGY] > 0;
             }
         });
 
         if (targets.length > 0) {
-            // Prioritize extensions and spawn over storage
+            // Prioritize extensions over storage, but avoid spawn if possible
             const priorityTargets = targets.filter(t => 
-                t.structureType === STRUCTURE_EXTENSION || 
-                t.structureType === STRUCTURE_SPAWN
+                t.structureType === STRUCTURE_EXTENSION
             );
             
             const target = creep.pos.findClosestByPath(priorityTargets.length > 0 ? priorityTargets : targets);
@@ -570,22 +651,30 @@ function manageCPUForPixels() {
     const cpuLimit = Game.cpu.limit;
     const cpuBucket = Game.cpu.bucket;
     
-    // Direct Pixel generation strategy
-    if (cpuBucket >= 10000) {
-        // We have enough CPU in bucket to generate a Pixel
-        const result = Game.cpu.generatePixel();
-        if (result === OK) {
-            console.log(`🎯 PIXEL GENERATED! Bucket: ${cpuBucket} → ${Game.cpu.bucket}, Pixels: ${Game.resources['pixel'] || 0}`);
-        } else {
-            console.log(`❌ Failed to generate Pixel: ${result}`);
+    // Check if generatePixel function is available (not available on local servers)
+    if (typeof Game.cpu.generatePixel === 'function') {
+        // Direct Pixel generation strategy
+        if (cpuBucket >= 10000) {
+            // We have enough CPU in bucket to generate a Pixel
+            const result = Game.cpu.generatePixel();
+            if (result === OK) {
+                console.log(`🎯 PIXEL GENERATED! Bucket: ${cpuBucket} → ${Game.cpu.bucket}, Pixels: ${Game.resources['pixel'] || 0}`);
+            } else {
+                console.log(`❌ Failed to generate Pixel: ${result}`);
+            }
+        } else if (cpuBucket >= 8000) {
+            // Close to earning a Pixel, start preparing
+            console.log(`⚡ Preparing for Pixel: Bucket ${cpuBucket}/10000`);
         }
-    } else if (cpuBucket >= 8000) {
-        // Close to earning a Pixel, start preparing
-        console.log(`⚡ Preparing for Pixel: Bucket ${cpuBucket}/10000`);
-    }
-    
-    // Log Pixel status every 100 ticks
-    if (Game.time % 100 === 0) {
-        console.log(`CPU: ${cpuUsed.toFixed(2)}/${cpuLimit}, Bucket: ${cpuBucket}, Pixels: ${Game.resources['pixel'] || 0}`);
+        
+        // Log Pixel status every 100 ticks
+        if (Game.time % 100 === 0) {
+            console.log(`CPU: ${cpuUsed.toFixed(2)}/${cpuLimit}, Bucket: ${cpuBucket}, Pixels: ${Game.resources['pixel'] || 0}`);
+        }
+    } else {
+        // Local server mode - just log CPU usage without Pixel generation
+        if (Game.time % 100 === 0) {
+            console.log(`CPU: ${cpuUsed.toFixed(2)}/${cpuLimit}, Bucket: ${cpuBucket} (Local Server - No Pixel Generation)`);
+        }
     }
 }
