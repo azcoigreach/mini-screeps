@@ -39,7 +39,6 @@ module.exports.loop = function () {
     
     // Count creeps by role
     const creeps = {
-        harvester: _.filter(Game.creeps, creep => creep.memory.role === 'harvester'),
         miner: _.filter(Game.creeps, creep => creep.memory.role === 'miner'),
         hauler: _.filter(Game.creeps, creep => creep.memory.role === 'hauler'),
         upgrader: _.filter(Game.creeps, creep => creep.memory.role === 'upgrader'),
@@ -262,16 +261,7 @@ function spawnCreeps(spawn, creeps) {
     const populationTargets = getPopulationByRCL(rcl);
     const bodies = getBodiesByEnergyCapacity(energyCapacity);
     
-    // Simple spawn priority: harvester > miner > hauler > upgrader > builder
-    if (creeps.harvester.length < populationTargets.harvester) {
-        if (spawn.canCreateCreep(bodies.harvester) === OK) {
-            const name = 'harv:' + generateHexId();
-            spawn.createCreep(bodies.harvester, name, { role: 'harvester' });
-            console.log(`Spawning harvester (${creeps.harvester.length + 1}/${populationTargets.harvester})`);
-            return;
-        }
-    }
-    
+    // Simple spawn priority: miner > hauler > upgrader > builder
     if (creeps.miner.length < populationTargets.miner) {
         if (spawn.canCreateCreep(bodies.miner) === OK) {
             const name = 'mine:' + generateHexId();
@@ -313,23 +303,23 @@ function spawnCreeps(spawn, creeps) {
 function getPopulationByRCL(rcl) {
     switch (rcl) {
         case 1:
-            return { harvester: 2, miner: 0, hauler: 0, upgrader: 1, builder: 1 };
+            return { miner: 2, hauler: 1, upgrader: 1, builder: 1 };
         case 2:
-            return { harvester: 2, miner: 0, hauler: 0, upgrader: 2, builder: 1 };
+            return { miner: 2, hauler: 1, upgrader: 2, builder: 1 };
         case 3:
-            return { harvester: 1, miner: 2, hauler: 2, upgrader: 2, builder: 1 };
+            return { miner: 2, hauler: 2, upgrader: 2, builder: 1 };
         case 4:
-            return { harvester: 0, miner: 2, hauler: 2, upgrader: 3, builder: 1 };
+            return { miner: 2, hauler: 2, upgrader: 3, builder: 1 };
         case 5:
-            return { harvester: 0, miner: 2, hauler: 2, upgrader: 4, builder: 1 };
+            return { miner: 2, hauler: 2, upgrader: 4, builder: 1 };
         case 6:
-            return { harvester: 0, miner: 2, hauler: 2, upgrader: 4, builder: 1 };
+            return { miner: 2, hauler: 2, upgrader: 4, builder: 1 };
         case 7:
-            return { harvester: 0, miner: 2, hauler: 3, upgrader: 5, builder: 2 };
+            return { miner: 2, hauler: 3, upgrader: 5, builder: 2 };
         case 8:
-            return { harvester: 0, miner: 2, hauler: 3, upgrader: 6, builder: 2 };
+            return { miner: 2, hauler: 3, upgrader: 6, builder: 2 };
         default:
-            return { harvester: 1, miner: 0, hauler: 0, upgrader: 1, builder: 1 };
+            return { miner: 2, hauler: 1, upgrader: 1, builder: 1 };
     }
 }
 
@@ -337,7 +327,6 @@ function getPopulationByRCL(rcl) {
 function getBodiesByEnergyCapacity(energyCapacity) {
     if (energyCapacity >= 1800) { // RCL 6+
         return {
-            harvester: [WORK, WORK, WORK, CARRY, CARRY, MOVE, MOVE, MOVE], // 3W2C3M
             miner: [WORK, WORK, WORK, WORK, WORK, MOVE], // 5W1M
             hauler: [CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, MOVE, MOVE, MOVE, MOVE], // 8C4M
             upgrader: [WORK, WORK, WORK, CARRY, CARRY, MOVE, MOVE, MOVE], // 3W2C3M
@@ -345,7 +334,6 @@ function getBodiesByEnergyCapacity(energyCapacity) {
         };
     } else if (energyCapacity >= 1300) { // RCL 5
         return {
-            harvester: [WORK, WORK, CARRY, CARRY, MOVE, MOVE], // 2W2C2M
             miner: [WORK, WORK, WORK, WORK, WORK, MOVE], // 5W1M
             hauler: [CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, MOVE, MOVE, MOVE], // 6C3M
             upgrader: [WORK, WORK, CARRY, CARRY, MOVE, MOVE], // 2W2C2M
@@ -353,7 +341,6 @@ function getBodiesByEnergyCapacity(energyCapacity) {
         };
     } else if (energyCapacity >= 800) { // RCL 4
         return {
-            harvester: [WORK, WORK, CARRY, MOVE], // 2W1C1M
             miner: [WORK, WORK, WORK, WORK, WORK, MOVE], // 5W1M
             hauler: [CARRY, CARRY, CARRY, CARRY, MOVE, MOVE], // 4C2M
             upgrader: [WORK, WORK, CARRY, MOVE], // 2W1C1M
@@ -361,7 +348,6 @@ function getBodiesByEnergyCapacity(energyCapacity) {
         };
     } else if (energyCapacity >= 550) { // RCL 3
         return {
-            harvester: [WORK, CARRY, MOVE], // 1W1C1M
             miner: [WORK, WORK, WORK, WORK, WORK, MOVE], // 5W1M
             hauler: [CARRY, CARRY, MOVE], // 2C1M
             upgrader: [WORK, CARRY, MOVE], // 1W1C1M
@@ -369,7 +355,6 @@ function getBodiesByEnergyCapacity(energyCapacity) {
         };
     } else { // RCL 1-2
         return {
-            harvester: [WORK, CARRY, MOVE], // 1W1C1M
             miner: [WORK, WORK, WORK, MOVE], // 3W1M
             hauler: [CARRY, CARRY, MOVE], // 2C1M
             upgrader: [WORK, CARRY, MOVE], // 1W1C1M
@@ -412,9 +397,6 @@ function createMissingConstructionSites(room) {
 
 function runCreep(creep) {
     switch (creep.memory.role) {
-        case 'harvester':
-            runHarvester(creep);
-            break;
         case 'miner':
             runMiner(creep);
             break;
@@ -427,78 +409,6 @@ function runCreep(creep) {
         case 'builder':
             runBuilder(creep);
             break;
-    }
-}
-
-function runHarvester(creep) {
-    // Bootstrap harvester: harvest and deliver energy to spawn/extensions
-    if (creep.store.getFreeCapacity() > 0) {
-        const sources = creep.room.find(FIND_SOURCES);
-        if (sources.length === 0) {
-            console.log(`No sources found in room ${creep.room.name}`);
-            return;
-        }
-        const source = creep.pos.findClosestByPath(sources);
-        if (!source) {
-            console.log(`No valid path to source for ${creep.name}`);
-            return;
-        }
-        const harvestResult = creep.harvest(source);
-        if (harvestResult === ERR_NOT_IN_RANGE) {
-            const moveResult = creep.moveTo(source, { visualizePathStyle: { stroke: '#ffaa00' } });
-            if (moveResult !== OK) {
-                console.log(`Move error for ${creep.name}: ${moveResult}`);
-            }
-        } else if (harvestResult !== OK) {
-            console.log(`Harvest error for ${creep.name}: ${harvestResult}`);
-        }
-    } else {
-        // Find spawn/extensions to deliver energy to
-        const targets = creep.room.find(FIND_STRUCTURES, {
-            filter: (structure) => {
-                return (structure.structureType === STRUCTURE_EXTENSION ||
-                        structure.structureType === STRUCTURE_SPAWN ||
-                        structure.structureType === STRUCTURE_TOWER) &&
-                       structure.store.getFreeCapacity(RESOURCE_ENERGY) > 0;
-            }
-        });
-
-        if (targets.length > 0) {
-            const target = creep.pos.findClosestByPath(targets);
-            if (target) {
-                const transferResult = creep.transfer(target, RESOURCE_ENERGY);
-                if (transferResult === ERR_NOT_IN_RANGE) {
-                    creep.moveTo(target, { visualizePathStyle: { stroke: '#ffffff' } });
-                } else if (transferResult !== OK) {
-                    console.log(`Harvester transfer error: ${transferResult}`);
-                }
-            }
-        } else {
-            // No space in structures, find other creeps that need energy
-            const needyCreeps = creep.room.find(FIND_MY_CREEPS, {
-                filter: c => (c.memory.role === 'upgrader' || c.memory.role === 'builder') && 
-                           c.store.getFreeCapacity(RESOURCE_ENERGY) > 0
-            });
-            
-            if (needyCreeps.length > 0) {
-                const target = creep.pos.findClosestByPath(needyCreeps);
-                if (target) {
-                    const transferResult = creep.transfer(target, RESOURCE_ENERGY);
-                    if (transferResult === ERR_NOT_IN_RANGE) {
-                        creep.moveTo(target, { visualizePathStyle: { stroke: '#ffffff' } });
-                    }
-                }
-            } else {
-                // No one needs energy, help upgrade controller
-                const controller = creep.room.controller;
-                if (controller) {
-                    const upgradeResult = creep.upgradeController(controller);
-                    if (upgradeResult === ERR_NOT_IN_RANGE) {
-                        creep.moveTo(controller, { visualizePathStyle: { stroke: '#ffffff' } });
-                    }
-                }
-            }
-        }
     }
 }
 
@@ -621,9 +531,9 @@ function runUpgrader(creep) {
             console.log(`Upgrade error: ${upgradeResult} for creep ${creep.name}`);
         }
     } else {
-        // In bootstrap phase, get energy from harvesters or wait near spawn
-        const harvesters = creep.room.find(FIND_MY_CREEPS, {
-            filter: c => c.memory.role === 'harvester' && c.store[RESOURCE_ENERGY] > 0
+        // Get energy from haulers, extensions, containers, or storage
+        const haulers = creep.room.find(FIND_MY_CREEPS, {
+            filter: c => c.memory.role === 'hauler' && c.store[RESOURCE_ENERGY] > 0
         });
         
         const extensions = creep.room.find(FIND_MY_STRUCTURES, {
@@ -638,7 +548,7 @@ function runUpgrader(creep) {
             filter: s => s.structureType === STRUCTURE_STORAGE && s.store[RESOURCE_ENERGY] > 0
         });
         
-        // Priority: extensions > containers > storage > harvesters
+        // Priority: extensions > containers > storage > haulers
         let target = null;
         if (extensions.length > 0) {
             target = creep.pos.findClosestByPath(extensions);
@@ -646,8 +556,8 @@ function runUpgrader(creep) {
             target = creep.pos.findClosestByPath(containers);
         } else if (storage.length > 0) {
             target = creep.pos.findClosestByPath(storage);
-        } else if (harvesters.length > 0) {
-            target = creep.pos.findClosestByPath(harvesters);
+        } else if (haulers.length > 0) {
+            target = creep.pos.findClosestByPath(haulers);
         }
         
         if (target) {
@@ -660,7 +570,7 @@ function runUpgrader(creep) {
                     console.log(`Upgrader withdraw error: ${withdrawResult}`);
                 }
             } else {
-                // It's a harvester creep, get energy from it
+                // It's a hauler creep, get energy from it
                 const transferResult = target.transfer(creep, RESOURCE_ENERGY);
                 if (transferResult === ERR_NOT_IN_RANGE) {
                     creep.moveTo(target, { visualizePathStyle: { stroke: '#ffaa00' } });
@@ -705,9 +615,9 @@ function runBuilder(creep) {
             }
         }
     } else {
-        // In bootstrap phase, get energy from harvesters or wait near spawn
-        const harvesters = creep.room.find(FIND_MY_CREEPS, {
-            filter: c => c.memory.role === 'harvester' && c.store[RESOURCE_ENERGY] > 0
+        // Get energy from haulers, extensions, containers, or storage
+        const haulers = creep.room.find(FIND_MY_CREEPS, {
+            filter: c => c.memory.role === 'hauler' && c.store[RESOURCE_ENERGY] > 0
         });
         
         const extensions = creep.room.find(FIND_MY_STRUCTURES, {
@@ -722,7 +632,7 @@ function runBuilder(creep) {
             filter: s => s.structureType === STRUCTURE_STORAGE && s.store[RESOURCE_ENERGY] > 0
         });
         
-        // Priority: extensions > containers > storage > harvesters
+        // Priority: extensions > containers > storage > haulers
         let target = null;
         if (extensions.length > 0) {
             target = creep.pos.findClosestByPath(extensions);
@@ -730,8 +640,8 @@ function runBuilder(creep) {
             target = creep.pos.findClosestByPath(containers);
         } else if (storage.length > 0) {
             target = creep.pos.findClosestByPath(storage);
-        } else if (harvesters.length > 0) {
-            target = creep.pos.findClosestByPath(harvesters);
+        } else if (haulers.length > 0) {
+            target = creep.pos.findClosestByPath(haulers);
         }
         
         if (target) {
@@ -744,7 +654,7 @@ function runBuilder(creep) {
                     console.log(`Builder withdraw error: ${withdrawResult}`);
                 }
             } else {
-                // It's a harvester creep, get energy from it
+                // It's a hauler creep, get energy from it
                 const transferResult = target.transfer(creep, RESOURCE_ENERGY);
                 if (transferResult === ERR_NOT_IN_RANGE) {
                     creep.moveTo(target, { visualizePathStyle: { stroke: '#ffaa00' } });
