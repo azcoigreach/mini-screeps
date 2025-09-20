@@ -87,170 +87,287 @@ function planBase(room) {
     const spawn = room.find(FIND_MY_SPAWNS)[0];
     const sources = room.find(FIND_SOURCES);
     
-    // Find a good spot for the base (near controller and spawn)
-    const basePos = findBasePosition(controller, spawn);
-    if (!basePos) return;
-
-    // Store base position in room memory
-    room.memory.basePos = { x: basePos.x, y: basePos.y };
-    
-    // Plan base structures around the base
-    const baseStructures = [
-        STRUCTURE_EXTENSION,
-        STRUCTURE_EXTENSION,
-        STRUCTURE_EXTENSION,
-        STRUCTURE_EXTENSION,
-        STRUCTURE_EXTENSION,
-        STRUCTURE_EXTENSION,
-        STRUCTURE_EXTENSION,
-        STRUCTURE_EXTENSION,
-        STRUCTURE_EXTENSION,
-        STRUCTURE_EXTENSION,
-        STRUCTURE_TOWER,
-        STRUCTURE_TOWER,
-        STRUCTURE_LINK,
-        STRUCTURE_STORAGE,
-        STRUCTURE_TERMINAL
-    ];
-
+    // Initialize base planning storage
     room.memory.plannedStructures = [];
+    room.memory.baseCenter = null;
     
-    // Arrange base structures in a grid pattern around the base
-    const radius = 3;
-    let structureIndex = 0;
+    // Find best anchor position using distance transform
+    const anchor = findOptimalAnchor(room, controller, spawn);
+    if (!anchor) {
+        console.log(`Failed to find suitable anchor position in room ${room.name}`);
+        return;
+    }
     
-    for (let x = -radius; x <= radius; x++) {
-        for (let y = -radius; y <= radius; y++) {
-            if (x === 0 && y === 0) continue; // Skip center (base position)
+    room.memory.baseCenter = { x: anchor.x, y: anchor.y };
+    console.log(`Base anchor positioned at ${anchor.x},${anchor.y}`);
+    
+    // Place core stamp (spawn area + extensions)
+    placeCoreStamp(room, anchor);
+    
+    // Place source stamps (containers + roads)
+    for (const source of sources) {
+        placeSourceStamp(room, source);
+    }
+    
+    // Place controller stamp (container + roads)
+    placeControllerStamp(room, controller, anchor);
+    
+    // Place extension field stamps around core
+    placeExtensionFields(room, anchor);
+    
+    // Place defense stamps (towers)
+    placeDefenseStamps(room, anchor);
+    
+    // Place economy stamps (storage, terminal, links)
+    placeEconomyStamps(room, anchor);
+    
+    // Connect everything with roads
+    planRoadNetwork(room, anchor, sources, controller);
+    
+    console.log(`Base planned with ${room.memory.plannedStructures.length} structures`);
+}
+
+// Distance transform to find best anchor position
+function findOptimalAnchor(room, controller, spawn) {
+    const terrain = new Room.Terrain(room.name);
+    const distanceMatrix = new PathFinder.CostMatrix();
+    
+    // Calculate distance from walls for each position
+    for (let x = 5; x < 45; x++) {
+        for (let y = 5; y < 45; y++) {
+            if (terrain.get(x, y) === TERRAIN_MASK_WALL) {
+                distanceMatrix.set(x, y, 0);
+                continue;
+            }
             
-            const pos = new RoomPosition(basePos.x + x, basePos.y + y, room.name);
-            if (pos.lookFor(LOOK_TERRAIN)[0] === 'wall') continue;
+            // Find distance to nearest wall
+            let minDist = 50;
+            for (let dx = -4; dx <= 4; dx++) {
+                for (let dy = -4; dy <= 4; dy++) {
+                    const checkX = x + dx;
+                    const checkY = y + dy;
+                    if (checkX < 0 || checkX > 49 || checkY < 0 || checkY > 49) continue;
+                    if (terrain.get(checkX, checkY) === TERRAIN_MASK_WALL) {
+                        const dist = Math.max(Math.abs(dx), Math.abs(dy));
+                        minDist = Math.min(minDist, dist);
+                    }
+                }
+            }
+            distanceMatrix.set(x, y, minDist);
+        }
+    }
+    
+    // Find position with good wall distance and reasonable access to controller/spawn
+    let bestPos = null;
+    let bestScore = 0;
+    
+    for (let x = 10; x < 40; x++) {
+        for (let y = 10; y < 40; y++) {
+            const wallDist = distanceMatrix.get(x, y);
+            if (wallDist < 3) continue; // Need space for base
             
-            if (structureIndex < baseStructures.length) {
-                room.memory.plannedStructures.push({
-                    x: pos.x,
-                    y: pos.y,
-                    type: baseStructures[structureIndex]
-                });
-                structureIndex++;
+            const controllerDist = Math.max(Math.abs(x - controller.pos.x), Math.abs(y - controller.pos.y));
+            const spawnDist = Math.max(Math.abs(x - spawn.pos.x), Math.abs(y - spawn.pos.y));
+            
+            // Score: prefer wall distance, penalize excessive distance from controller/spawn
+            const score = wallDist * 2 - Math.min(controllerDist, 15) * 0.5 - Math.min(spawnDist, 10) * 0.3;
+            
+            if (score > bestScore) {
+                bestScore = score;
+                bestPos = { x, y };
             }
         }
     }
     
-    // Plan containers near sources
-    for (const source of sources) {
-        const containerPos = findContainerPosition(source);
-        if (containerPos) {
-            room.memory.plannedStructures.push({
-                x: containerPos.x,
-                y: containerPos.y,
-                type: STRUCTURE_CONTAINER
-            });
+    return bestPos;
+}
+
+// Core stamp: Central area with key structures
+function placeCoreStamp(room, anchor) {
+    const coreStamp = [
+        // Format: [dx, dy, structureType]
+        [0, 0, STRUCTURE_STORAGE],     // Center
+        [-1, -1, STRUCTURE_EXTENSION], [0, -1, STRUCTURE_EXTENSION], [1, -1, STRUCTURE_EXTENSION],
+        [-1, 0, STRUCTURE_EXTENSION],                                    [1, 0, STRUCTURE_EXTENSION],
+        [-1, 1, STRUCTURE_EXTENSION],  [0, 1, STRUCTURE_EXTENSION],  [1, 1, STRUCTURE_EXTENSION],
+        // Secondary ring
+        [-2, 0, STRUCTURE_TOWER],      [2, 0, STRUCTURE_TOWER],
+        [0, -2, STRUCTURE_LINK],       [0, 2, STRUCTURE_TERMINAL]
+    ];
+    
+    addStampToPlannedStructures(room, anchor, coreStamp);
+}
+
+// Extension field stamps: Groups of extensions with filler access
+function placeExtensionFields(room, anchor) {
+    const extensionStamp = [
+        // 3x3 extension cluster
+        [-1, -1, STRUCTURE_EXTENSION], [0, -1, STRUCTURE_EXTENSION], [1, -1, STRUCTURE_EXTENSION],
+        [-1, 0, STRUCTURE_EXTENSION],  [0, 0, STRUCTURE_ROAD],       [1, 0, STRUCTURE_EXTENSION],
+        [-1, 1, STRUCTURE_EXTENSION],  [0, 1, STRUCTURE_EXTENSION],  [1, 1, STRUCTURE_EXTENSION]
+    ];
+    
+    // Place multiple extension fields around core
+    const fieldPositions = [
+        { x: anchor.x - 5, y: anchor.y - 5 },
+        { x: anchor.x + 5, y: anchor.y - 5 },
+        { x: anchor.x - 5, y: anchor.y + 5 },
+        { x: anchor.x + 5, y: anchor.y + 5 }
+    ];
+    
+    for (const fieldPos of fieldPositions) {
+        if (isValidStampPosition(room, fieldPos, extensionStamp)) {
+            addStampToPlannedStructures(room, fieldPos, extensionStamp);
         }
     }
+}
+
+// Source stamps: Container + access roads
+function placeSourceStamp(room, source) {
+    const sourceStamp = [
+        [0, 0, STRUCTURE_CONTAINER]
+    ];
     
-    // Plan container near controller for upgraders
-    const controllerContainerPos = findControllerContainerPosition(controller);
-    if (controllerContainerPos) {
+    // Find best position adjacent to source
+    const positions = [
+        { x: source.pos.x - 1, y: source.pos.y },
+        { x: source.pos.x + 1, y: source.pos.y },
+        { x: source.pos.x, y: source.pos.y - 1 },
+        { x: source.pos.x, y: source.pos.y + 1 }
+    ];
+    
+    for (const pos of positions) {
+        if (isValidStampPosition(room, pos, sourceStamp)) {
+            addStampToPlannedStructures(room, pos, sourceStamp);
+            break;
+        }
+    }
+}
+
+// Controller stamp: Container for upgraders
+function placeControllerStamp(room, controller, anchor) {
+    const controllerStamp = [
+        [0, 0, STRUCTURE_CONTAINER]
+    ];
+    
+    // Find position 2-3 tiles from controller, towards base
+    const direction = {
+        x: anchor.x > controller.pos.x ? 1 : -1,
+        y: anchor.y > controller.pos.y ? 1 : -1
+    };
+    
+    const containerPos = {
+        x: controller.pos.x + direction.x * 2,
+        y: controller.pos.y + direction.y * 2
+    };
+    
+    if (isValidStampPosition(room, containerPos, controllerStamp)) {
+        addStampToPlannedStructures(room, containerPos, controllerStamp);
+    }
+}
+
+// Defense stamps: Towers with optimal coverage
+function placeDefenseStamps(room, anchor) {
+    const towerStamp = [
+        [0, 0, STRUCTURE_TOWER]
+    ];
+    
+    // Place towers at strategic positions around base
+    const towerPositions = [
+        { x: anchor.x - 3, y: anchor.y },
+        { x: anchor.x + 3, y: anchor.y },
+        { x: anchor.x, y: anchor.y - 3 },
+        { x: anchor.x, y: anchor.y + 3 }
+    ];
+    
+    for (const pos of towerPositions) {
+        if (isValidStampPosition(room, pos, towerStamp)) {
+            addStampToPlannedStructures(room, pos, towerStamp);
+        }
+    }
+}
+
+// Economy stamps: Storage, terminal, links
+function placeEconomyStamps(room, anchor) {
+    const economyStamp = [
+        [0, 0, STRUCTURE_TERMINAL],
+        [2, 0, STRUCTURE_LINK]
+    ];
+    
+    const economyPos = { x: anchor.x + 4, y: anchor.y };
+    if (isValidStampPosition(room, economyPos, economyStamp)) {
+        addStampToPlannedStructures(room, economyPos, economyStamp);
+    }
+}
+
+// Helper function: Check if stamp can be placed at position
+function isValidStampPosition(room, anchor, stamp) {
+    const terrain = new Room.Terrain(room.name);
+    
+    for (const [dx, dy, structureType] of stamp) {
+        const x = anchor.x + dx;
+        const y = anchor.y + dy;
+        
+        if (x < 2 || x > 47 || y < 2 || y > 47) return false;
+        if (terrain.get(x, y) === TERRAIN_MASK_WALL) return false;
+        
+        // Check for existing structures (except roads can overlap)
+        const existing = room.lookForAt(LOOK_STRUCTURES, x, y);
+        if (existing.length > 0 && structureType !== STRUCTURE_ROAD) return false;
+    }
+    
+    return true;
+}
+
+// Helper function: Add stamp structures to planned list
+function addStampToPlannedStructures(room, anchor, stamp) {
+    for (const [dx, dy, structureType] of stamp) {
         room.memory.plannedStructures.push({
-            x: controllerContainerPos.x,
-            y: controllerContainerPos.y,
-            type: STRUCTURE_CONTAINER
+            x: anchor.x + dx,
+            y: anchor.y + dy,
+            type: structureType
         });
     }
-    
-    // Plan roads between sources and base for hauler efficiency
-    planRoads(room);
 }
 
-function findBasePosition(controller, spawn) {
-    // Find position between controller and spawn
-    const path = controller.pos.findPathTo(spawn);
-    if (path.length > 0) {
-        const midIndex = Math.floor(path.length / 2);
-        return path[midIndex];
-    }
-    return controller.pos;
-}
-
-function findContainerPosition(source) {
-    // Find a position adjacent to the source for a container
-    const positions = source.room.lookForAtArea(LOOK_TERRAIN, source.pos.y - 1, source.pos.x - 1, source.pos.y + 1, source.pos.x + 1, true);
-    
-    for (const position of positions) {
-        if (position.terrain === 'plain' || position.terrain === 'swamp') {
-            return { x: position.x, y: position.y };
-        }
-    }
-    return null;
-}
-
-function findControllerContainerPosition(controller) {
-    // Find a position near the controller for a container
-    const positions = controller.room.lookForAtArea(LOOK_TERRAIN, controller.pos.y - 2, controller.pos.x - 2, controller.pos.y + 2, controller.pos.x + 2, true);
-    
-    for (const position of positions) {
-        if (position.terrain === 'plain' || position.terrain === 'swamp') {
-            // Make sure it's not too close to the controller (need 1 space)
-            const distance = controller.pos.getRangeTo(position.x, position.y);
-            if (distance >= 2 && distance <= 3) {
-                return { x: position.x, y: position.y };
-            }
-        }
-    }
-    return null;
-}
-
-function planRoads(room) {
-    const sources = room.find(FIND_SOURCES);
-    const spawn = room.find(FIND_MY_SPAWNS)[0];
-    const basePos = room.memory.basePos;
-    
-    if (!basePos) return;
-    
-    const baseRoomPos = new RoomPosition(basePos.x, basePos.y, room.name);
-    
-    // Plan roads from each source to base
+// Smart road network planning
+function planRoadNetwork(room, anchor, sources, controller) {
+    // Connect sources to base
     for (const source of sources) {
-        const path = source.pos.findPathTo(baseRoomPos, {
-            ignoreCreeps: true,
-            ignoreRoads: true
-        });
-        
-        // Add road construction sites along the path (every few steps for efficiency)
-        for (let i = 0; i < path.length; i += 2) { // Every 2 steps to avoid too many roads
-            const pos = path[i];
-            const roomPos = new RoomPosition(pos.x, pos.y, room.name);
-            
-            // Check if there's already a structure planned or built here
-            const existingStructure = roomPos.lookFor(LOOK_STRUCTURES)[0];
-            const plannedStructure = room.memory.plannedStructures.find(p => p.x === pos.x && p.y === pos.y);
-            
-            if (!existingStructure && !plannedStructure) {
-                room.memory.plannedStructures.push({
-                    x: pos.x,
-                    y: pos.y,
-                    type: STRUCTURE_ROAD
-                });
-            }
-        }
+        const path = PathFinder.search(source.pos, { pos: new RoomPosition(anchor.x, anchor.y, room.name), range: 2 }).path;
+        addPathAsRoads(room, path);
     }
     
-    // Plan roads from base to controller
-    const controller = room.controller;
-    const controllerPath = baseRoomPos.findPathTo(controller, {
-        ignoreCreeps: true,
-        ignoreRoads: true
-    });
+    // Connect base to controller
+    const controllerPath = PathFinder.search(
+        new RoomPosition(anchor.x, anchor.y, room.name),
+        { pos: controller.pos, range: 3 }
+    ).path;
+    addPathAsRoads(room, controllerPath);
     
-    for (let i = 0; i < controllerPath.length; i += 2) {
-        const pos = controllerPath[i];
-        const roomPos = new RoomPosition(pos.x, pos.y, room.name);
-        
-        const existingStructure = roomPos.lookFor(LOOK_STRUCTURES)[0];
-        const plannedStructure = room.memory.plannedStructures.find(p => p.x === pos.x && p.y === pos.y);
-        
-        if (!existingStructure && !plannedStructure) {
+    // Connect extension fields to base
+    const fieldPositions = [
+        { x: anchor.x - 5, y: anchor.y - 5 },
+        { x: anchor.x + 5, y: anchor.y - 5 },
+        { x: anchor.x - 5, y: anchor.y + 5 },
+        { x: anchor.x + 5, y: anchor.y + 5 }
+    ];
+    
+    for (const fieldPos of fieldPositions) {
+        const path = PathFinder.search(
+            fieldPos,
+            { pos: new RoomPosition(anchor.x, anchor.y, room.name), range: 2 }
+        ).path;
+        addPathAsRoads(room, path);
+    }
+}
+
+// Helper function: Add path positions as road structures
+function addPathAsRoads(room, path) {
+    for (let i = 1; i < path.length - 1; i += 2) { // Skip every other tile for efficiency
+        const pos = path[i];
+        const existing = room.memory.plannedStructures.find(s => s.x === pos.x && s.y === pos.y);
+        if (!existing) {
             room.memory.plannedStructures.push({
                 x: pos.x,
                 y: pos.y,
