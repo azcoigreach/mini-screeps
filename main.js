@@ -354,8 +354,9 @@ function planRoadNetwork(room, anchor, sources, controller) {
     ];
     
     for (const fieldPos of fieldPositions) {
+        const startPos = new RoomPosition(fieldPos.x, fieldPos.y, room.name);
         const path = PathFinder.search(
-            fieldPos,
+            startPos,
             { pos: new RoomPosition(anchor.x, anchor.y, room.name), range: 2 }
         ).path;
         addPathAsRoads(room, path);
@@ -447,19 +448,19 @@ function spawnCreeps(spawn, creeps) {
 function getPopulationByRCL(rcl) {
     switch (rcl) {
         case 1:
-            return { miner: 2, hauler: 1, upgrader: 1, builder: 1 };
+            return { miner: 1, hauler: 1, upgrader: 1, builder: 2 };
         case 2:
-            return { miner: 2, hauler: 1, upgrader: 2, builder: 1 };
+            return { miner: 2, hauler: 3, upgrader: 2, builder: 4 };
         case 3:
-            return { miner: 2, hauler: 2, upgrader: 2, builder: 1 };
+            return { miner: 2, hauler: 4, upgrader: 2, builder: 4 };
         case 4:
-            return { miner: 2, hauler: 2, upgrader: 3, builder: 1 };
+            return { miner: 2, hauler: 4, upgrader: 3, builder: 3 };
         case 5:
-            return { miner: 2, hauler: 2, upgrader: 4, builder: 1 };
+            return { miner: 2, hauler: 4, upgrader: 4, builder: 3 };
         case 6:
-            return { miner: 2, hauler: 2, upgrader: 4, builder: 1 };
+            return { miner: 2, hauler: 4, upgrader: 4, builder: 2 };
         case 7:
-            return { miner: 2, hauler: 3, upgrader: 5, builder: 2 };
+            return { miner: 2, hauler: 4, upgrader: 5, builder: 2 };
         case 8:
             return { miner: 2, hauler: 3, upgrader: 6, builder: 2 };
         default:
@@ -493,7 +494,7 @@ function getBodiesByEnergyCapacity(energyCapacity) {
     } else if (energyCapacity >= 550) { // RCL 3
         return {
             miner: [WORK, WORK, WORK, WORK, WORK, MOVE], // 5W1M
-            hauler: [CARRY, CARRY, MOVE], // 2C1M
+            hauler: [CARRY, CARRY, CARRY, CARRY, MOVE], // 4C1M
             upgrader: [WORK, CARRY, MOVE], // 1W1C1M
             builder: [WORK, CARRY, MOVE] // 1W1C1M
         };
@@ -719,9 +720,61 @@ function runHauler(creep) {
         });
 
         if (sourceContainers.length > 0) {
-            const target = creep.pos.findClosestByPath(sourceContainers);
-            if (creep.withdraw(target, RESOURCE_ENERGY) === ERR_NOT_IN_RANGE) {
-                creep.moveTo(target, { visualizePathStyle: { stroke: '#ffaa00' } });
+            // Distribute haulers evenly across source containers instead of all going to closest
+            let target = null;
+            
+            // Check if hauler has an assigned source
+            if (creep.memory.assignedSource) {
+                const assignedContainer = sourceContainers.find(container => {
+                    const assignedSource = Game.getObjectById(creep.memory.assignedSource);
+                    return assignedSource && container.pos.getRangeTo(assignedSource) <= 2;
+                });
+                
+                if (assignedContainer && assignedContainer.store[RESOURCE_ENERGY] > 0) {
+                    target = assignedContainer;
+                } else {
+                    // Assigned source container is empty, clear assignment to find a new one
+                    delete creep.memory.assignedSource;
+                }
+            }
+            
+            // If no assignment or assigned container is empty, find best source to assign
+            if (!target) {
+                // Count haulers assigned to each source
+                const haulers = _.filter(Game.creeps, c => c.memory.role === 'hauler' && c.name !== creep.name);
+                const sourceAssignments = {};
+                
+                for (const source of sources) {
+                    sourceAssignments[source.id] = haulers.filter(h => h.memory.assignedSource === source.id).length;
+                }
+                
+                // Find source with least haulers assigned and available energy
+                let bestSource = null;
+                let leastAssigned = 999;
+                
+                for (const container of sourceContainers) {
+                    for (const source of sources) {
+                        if (container.pos.getRangeTo(source) <= 2) {
+                            const assignedCount = sourceAssignments[source.id] || 0;
+                            if (assignedCount < leastAssigned) {
+                                leastAssigned = assignedCount;
+                                bestSource = source;
+                                target = container;
+                            }
+                        }
+                    }
+                }
+                
+                if (bestSource) {
+                    creep.memory.assignedSource = bestSource.id;
+                    console.log(`${creep.name} assigned to source ${bestSource.id} (${leastAssigned + 1} haulers on this source)`);
+                }
+            }
+            
+            if (target) {
+                if (creep.withdraw(target, RESOURCE_ENERGY) === ERR_NOT_IN_RANGE) {
+                    creep.moveTo(target, { visualizePathStyle: { stroke: '#ffaa00' } });
+                }
             }
         } else {
             // No source containers yet, look for dropped energy near sources
@@ -732,19 +785,112 @@ function runHauler(creep) {
             });
             
             if (droppedEnergy.length > 0) {
-                const target = creep.pos.findClosestByPath(droppedEnergy);
-                if (creep.pickup(target) === ERR_NOT_IN_RANGE) {
+                // Distribute haulers across dropped energy sources too
+                let target = null;
+                
+                if (creep.memory.assignedSource) {
+                    const assignedSource = Game.getObjectById(creep.memory.assignedSource);
+                    if (assignedSource) {
+                        // Look for dropped energy near assigned source
+                        target = droppedEnergy.find(drop => drop.pos.getRangeTo(assignedSource) <= 3);
+                    }
+                }
+                
+                if (!target) {
+                    target = creep.pos.findClosestByPath(droppedEnergy);
+                }
+                
+                if (target && creep.pickup(target) === ERR_NOT_IN_RANGE) {
                     creep.moveTo(target, { visualizePathStyle: { stroke: '#ffaa00' } });
                 }
             } else {
-                // No energy available, move to closest source to wait for miners
-                const target = creep.pos.findClosestByPath(sources);
-                if (target && creep.pos.getRangeTo(target) > 3) {
-                    creep.moveTo(target, { visualizePathStyle: { stroke: '#ffaa00' } });
+                // No energy available, move to assigned source or closest source to wait
+                let waitTarget = null;
+                
+                if (creep.memory.assignedSource) {
+                    waitTarget = Game.getObjectById(creep.memory.assignedSource);
+                }
+                
+                if (!waitTarget) {
+                    waitTarget = creep.pos.findClosestByPath(sources);
+                }
+                
+                if (waitTarget && creep.pos.getRangeTo(waitTarget) > 3) {
+                    creep.moveTo(waitTarget, { visualizePathStyle: { stroke: '#ffaa00' } });
                 }
             }
         }
     }
+}
+
+// Helper function: Get distributed container for energy pickup
+function getDistributedEnergyContainer(creep, targets) {
+    if (targets.length === 0) return null;
+    
+    const sources = creep.room.find(FIND_SOURCES);
+    const sourceContainers = targets.filter(container => {
+        return sources.some(source => container.pos.getRangeTo(source) <= 2);
+    });
+    const nonSourceContainers = targets.filter(container => {
+        return !sources.some(source => container.pos.getRangeTo(source) <= 2);
+    });
+    
+    // Prefer non-source containers (storage, spawn area containers) first
+    if (nonSourceContainers.length > 0) {
+        return creep.pos.findClosestByPath(nonSourceContainers);
+    }
+    
+    // If only source containers available, use distribution logic
+    if (sourceContainers.length > 0) {
+        // Check if creep has an assigned source
+        if (creep.memory.assignedSource) {
+            const assignedContainer = sourceContainers.find(container => {
+                const assignedSource = Game.getObjectById(creep.memory.assignedSource);
+                return assignedSource && container.pos.getRangeTo(assignedSource) <= 2;
+            });
+            
+            if (assignedContainer && assignedContainer.store[RESOURCE_ENERGY] > 0) {
+                return assignedContainer;
+            } else {
+                // Assigned source container is empty, clear assignment
+                delete creep.memory.assignedSource;
+            }
+        }
+        
+        // Find source with least assigned creeps of this role
+        const sameRoleCreeps = _.filter(Game.creeps, c => c.memory.role === creep.memory.role && c.name !== creep.name);
+        const sourceAssignments = {};
+        
+        for (const source of sources) {
+            sourceAssignments[source.id] = sameRoleCreeps.filter(c => c.memory.assignedSource === source.id).length;
+        }
+        
+        let bestSource = null;
+        let leastAssigned = 999;
+        let bestContainer = null;
+        
+        for (const container of sourceContainers) {
+            for (const source of sources) {
+                if (container.pos.getRangeTo(source) <= 2) {
+                    const assignedCount = sourceAssignments[source.id] || 0;
+                    if (assignedCount < leastAssigned) {
+                        leastAssigned = assignedCount;
+                        bestSource = source;
+                        bestContainer = container;
+                    }
+                }
+            }
+        }
+        
+        if (bestSource) {
+            creep.memory.assignedSource = bestSource.id;
+            console.log(`${creep.name} (${creep.memory.role}) assigned to source ${bestSource.id}`);
+        }
+        
+        return bestContainer;
+    }
+    
+    return null;
 }
 
 function runUpgrader(creep) {
@@ -772,8 +918,8 @@ function runUpgrader(creep) {
         });
         
         if (targets.length > 0) {
-            // Use closest container/storage with energy for efficiency
-            const target = creep.pos.findClosestByPath(targets);
+            // Use distributed container selection for balanced source usage
+            const target = getDistributedEnergyContainer(creep, targets);
             
             if (target) {
                 const withdrawResult = creep.withdraw(target, RESOURCE_ENERGY);
@@ -810,16 +956,42 @@ function runUpgrader(creep) {
 function runBuilder(creep) {
     // If creep has energy, build things
     if (creep.store[RESOURCE_ENERGY] > 0) {
-        const targets = creep.room.find(FIND_CONSTRUCTION_SITES);
-        if (targets.length > 0) {
-            const target = creep.pos.findClosestByPath(targets);
-            if (target) {
-                const buildResult = creep.build(target);
-                if (buildResult === ERR_NOT_IN_RANGE) {
-                    creep.moveTo(target, { visualizePathStyle: { stroke: '#ffffff' } });
-                } else if (buildResult !== OK) {
-                    console.log(`Build error: ${buildResult} for creep ${creep.name}`);
+        let target = null;
+        
+        // Check if we have an assigned construction site
+        if (creep.memory.buildTarget) {
+            target = Game.getObjectById(creep.memory.buildTarget);
+            // If the target no longer exists (completed or destroyed), clear assignment
+            if (!target) {
+                delete creep.memory.buildTarget;
+            }
+        }
+        
+        // If no assigned target, find a new one
+        if (!target) {
+            const targets = creep.room.find(FIND_CONSTRUCTION_SITES);
+            if (targets.length > 0) {
+                target = creep.pos.findClosestByPath(targets);
+                if (target) {
+                    creep.memory.buildTarget = target.id;
+                    console.log(`${creep.name} assigned to build ${target.structureType} at ${target.pos.x},${target.pos.y}`);
                 }
+            }
+        }
+        
+        if (target) {
+            const buildResult = creep.build(target);
+            if (buildResult === ERR_NOT_IN_RANGE) {
+                creep.moveTo(target, { visualizePathStyle: { stroke: '#ffffff' } });
+            } else if (buildResult === OK) {
+                // Log progress occasionally
+                if (Game.time % 10 === 0) {
+                    console.log(`${creep.name} building ${target.structureType} - ${target.progress}/${target.progressTotal}`);
+                }
+            } else if (buildResult !== OK) {
+                console.log(`Build error: ${buildResult} for creep ${creep.name}`);
+                // Clear assignment on error to try a different site
+                delete creep.memory.buildTarget;
             }
         } else {
             // No construction sites, help upgrade controller
@@ -844,8 +1016,8 @@ function runBuilder(creep) {
         });
         
         if (targets.length > 0) {
-            // Use closest container/storage with energy for efficiency
-            const target = creep.pos.findClosestByPath(targets);
+            // Use distributed container selection for balanced source usage
+            const target = getDistributedEnergyContainer(creep, targets);
             
             if (target) {
                 const withdrawResult = creep.withdraw(target, RESOURCE_ENERGY);
