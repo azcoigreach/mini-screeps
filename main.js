@@ -501,10 +501,6 @@ function runMiner(creep) {
                    structure.pos.getRangeTo(source) <= 2;
         }
     })[0];
-}
-
-function countMissingStructures(room) {
-    if (!room.memory.plannedStructures) return 0;
     
     if (container) {
         // Move to container position and stay there
