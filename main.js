@@ -79,7 +79,11 @@ module.exports.loop = function () {
     // Run creep logic
     for (const name in Game.creeps) {
         const creep = Game.creeps[name];
-        runCreep(creep);
+        try {
+            runCreep(creep);
+        } catch (error) {
+            console.log(`Error running creep ${name}: ${error}`);
+        }
     }
 
     // CPU management for Pixel earning
@@ -558,6 +562,10 @@ function createMissingConstructionSites(room) {
 }
 
 function runCreep(creep) {
+    if (Game.time % 10 === 0) { // Debug every 10 ticks
+        console.log(`Running creep ${creep.name} with role ${creep.memory.role} at ${creep.pos.x},${creep.pos.y}`);
+    }
+    
     switch (creep.memory.role) {
         case 'harvester':
             runHarvester(creep);
@@ -574,15 +582,32 @@ function runCreep(creep) {
         case 'builder':
             runBuilder(creep);
             break;
+        default:
+            console.log(`Unknown role ${creep.memory.role} for creep ${creep.name}`);
     }
 }
 
 function runHarvester(creep) {
     // Bootstrap harvester: harvest and deliver energy to spawn/extensions
     if (creep.store.getFreeCapacity() > 0) {
-        const source = creep.pos.findClosestByPath(FIND_SOURCES);
-        if (creep.harvest(source) === ERR_NOT_IN_RANGE) {
-            creep.moveTo(source, { visualizePathStyle: { stroke: '#ffaa00' } });
+        const sources = creep.room.find(FIND_SOURCES);
+        if (sources.length === 0) {
+            console.log(`No sources found in room ${creep.room.name}`);
+            return;
+        }
+        const source = creep.pos.findClosestByPath(sources);
+        if (!source) {
+            console.log(`No valid path to source for ${creep.name}`);
+            return;
+        }
+        const harvestResult = creep.harvest(source);
+        if (harvestResult === ERR_NOT_IN_RANGE) {
+            const moveResult = creep.moveTo(source, { visualizePathStyle: { stroke: '#ffaa00' } });
+            if (moveResult !== OK) {
+                console.log(`Move error for ${creep.name}: ${moveResult}`);
+            }
+        } else if (harvestResult !== OK) {
+            console.log(`Harvest error for ${creep.name}: ${harvestResult}`);
         }
     } else {
         // Find spawn/extensions to deliver energy to
