@@ -441,7 +441,7 @@ function runCreep(creep) {
 
 function runMiner(creep) {
     // Miners are parked on containers and just harvest continuously
-    // Find assigned source or closest source
+    // Find assigned source or assign a new one
     let source = null;
     if (creep.memory.sourceId) {
         source = Game.getObjectById(creep.memory.sourceId);
@@ -450,23 +450,28 @@ function runMiner(creep) {
     if (!source) {
         // Assign to a source that doesn't have a dedicated miner
         const sources = creep.room.find(FIND_SOURCES);
-        const miners = _.filter(Game.creeps, c => c.memory.role === 'miner');
+        const miners = _.filter(Game.creeps, c => c.memory.role === 'miner' && c.name !== creep.name);
         const assignedSources = miners.map(m => m.memory.sourceId).filter(id => id);
         
+        // Find an unassigned source
         for (const s of sources) {
             if (!assignedSources.includes(s.id)) {
                 source = s;
                 creep.memory.sourceId = s.id;
+                console.log(`${creep.name} assigned to source ${s.id}`);
                 break;
             }
         }
         
-        // If all sources are assigned, use closest
-        if (!source) {
-            source = creep.pos.findClosestByPath(FIND_SOURCES);
+        // If all sources are assigned, this shouldn't happen with proper population control
+        if (!source && sources.length > 0) {
+            // Assign to closest source as fallback, but log warning
+            source = creep.pos.findClosestByPath(sources);
             creep.memory.sourceId = source.id;
+            console.log(`WARNING: ${creep.name} forced to share source ${source.id} - check population targets`);
         }
     }
+    
     if (!source) return;
     
     // Find container near this source
@@ -481,7 +486,8 @@ function runMiner(creep) {
         // Move to container position and stay there
         if (creep.pos.isEqualTo(container.pos)) {
             // We're on the container, just harvest
-            if (creep.harvest(source) === ERR_NOT_IN_RANGE) {
+            const harvestResult = creep.harvest(source);
+            if (harvestResult === ERR_NOT_IN_RANGE) {
                 // Container is not adjacent to source, this shouldn't happen
                 console.log(`Container not adjacent to source ${source.id}`);
             }
