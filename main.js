@@ -274,6 +274,18 @@ function spawnCreeps(spawn, creeps) {
     const populationTargets = getPopulationByRCL(rcl);
     const bodies = getBodiesByEnergyCapacity(energyCapacity);
     
+    // Calculate body costs for debugging
+    const bodyCosts = {
+        miner: bodies.miner.reduce((cost, part) => cost + (part === WORK ? 100 : part === CARRY ? 50 : 50), 0),
+        hauler: bodies.hauler.reduce((cost, part) => cost + (part === WORK ? 100 : part === CARRY ? 50 : 50), 0),
+        upgrader: bodies.upgrader.reduce((cost, part) => cost + (part === WORK ? 100 : part === CARRY ? 50 : 50), 0),
+        builder: bodies.builder.reduce((cost, part) => cost + (part === WORK ? 100 : part === CARRY ? 50 : 50), 0)
+    };
+    
+    const energyAvailable = room.energyAvailable;
+    
+    console.log(`RCL ${rcl}: Energy ${energyAvailable}/${energyCapacity}, Costs: M:${bodyCosts.miner} H:${bodyCosts.hauler} U:${bodyCosts.upgrader} B:${bodyCosts.builder}`);
+    
     // Simple spawn priority: miner > hauler > upgrader > builder
     if (creeps.miner.length < populationTargets.miner) {
         if (spawn.canCreateCreep(bodies.miner) === OK) {
@@ -281,6 +293,8 @@ function spawnCreeps(spawn, creeps) {
             spawn.createCreep(bodies.miner, name, { role: 'miner' });
             console.log(`Spawning miner (${creeps.miner.length + 1}/${populationTargets.miner})`);
             return;
+        } else {
+            console.log(`Cannot spawn miner - need ${bodies.miner.length * 50} energy, have ${spawn.room.energyAvailable}/${energyCapacity}`);
         }
     }
     
@@ -368,7 +382,7 @@ function getBodiesByEnergyCapacity(energyCapacity) {
         };
     } else { // RCL 1-2
         return {
-            miner: [WORK, WORK, WORK, MOVE], // 3W1M
+            miner: [WORK, WORK, MOVE], // 2W1M - only 250 energy
             hauler: [CARRY, CARRY, MOVE], // 2C1M
             upgrader: [WORK, CARRY, MOVE], // 1W1C1M
             builder: [WORK, CARRY, MOVE] // 1W1C1M
