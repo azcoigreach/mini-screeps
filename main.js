@@ -514,10 +514,21 @@ function runHauler(creep) {
             }
         });
         
+        // Find source positions to identify source containers
+        const sources = creep.room.find(FIND_SOURCES);
+        
         const containers = creep.room.find(FIND_STRUCTURES, {
             filter: (structure) => {
-                return structure.structureType === STRUCTURE_CONTAINER &&
-                       structure.store.getFreeCapacity(RESOURCE_ENERGY) > 0;
+                if (structure.structureType !== STRUCTURE_CONTAINER || structure.store.getFreeCapacity(RESOURCE_ENERGY) <= 0) {
+                    return false;
+                }
+                // Don't deliver to source containers (they are for pickup only)
+                for (const source of sources) {
+                    if (structure.pos.getRangeTo(source) <= 2) {
+                        return false; // This is a source container, skip it
+                    }
+                }
+                return true; // This is a non-source container (like near spawn)
             }
         });
         
@@ -534,13 +545,9 @@ function runHauler(creep) {
         if (spawnTargets.length > 0) {
             target = creep.pos.findClosestByPath(spawnTargets);
         }
-        // Priority 2: Container near spawn (for upgraders/builders)
-        else if (containers.length > 0 && spawn) {
-            // Find container closest to spawn
-            const spawnContainer = spawn.pos.findClosestByPath(containers);
-            if (spawnContainer) {
-                target = spawnContainer;
-            }
+        // Priority 2: Non-source containers (like near spawn for upgraders/builders)
+        else if (containers.length > 0) {
+            target = creep.pos.findClosestByPath(containers);
         }
         // Priority 3: Storage
         else if (storage.length > 0) {
@@ -553,16 +560,25 @@ function runHauler(creep) {
             }
         }
     } else {
-        // Not carrying energy, find source containers to pick up from
-        const containers = creep.room.find(FIND_STRUCTURES, {
+        // Pick up energy from source containers only (not delivery containers)
+        const sources = creep.room.find(FIND_SOURCES);
+        const sourceContainers = creep.room.find(FIND_STRUCTURES, {
             filter: (structure) => {
-                return structure.structureType === STRUCTURE_CONTAINER &&
-                       structure.store[RESOURCE_ENERGY] > 0;
+                if (structure.structureType !== STRUCTURE_CONTAINER || structure.store[RESOURCE_ENERGY] <= 0) {
+                    return false;
+                }
+                // Only pick up from source containers
+                for (const source of sources) {
+                    if (structure.pos.getRangeTo(source) <= 2) {
+                        return true; // This is a source container
+                    }
+                }
+                return false; // This is not a source container
             }
         });
 
-        if (containers.length > 0) {
-            const target = creep.pos.findClosestByPath(containers);
+        if (sourceContainers.length > 0) {
+            const target = creep.pos.findClosestByPath(sourceContainers);
             if (creep.withdraw(target, RESOURCE_ENERGY) === ERR_NOT_IN_RANGE) {
                 creep.moveTo(target, { visualizePathStyle: { stroke: '#ffaa00' } });
             }
