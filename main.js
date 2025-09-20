@@ -59,17 +59,9 @@ module.exports.loop = function () {
     // Spawn creeps based on needs
     spawnCreeps(spawn, creeps);
 
-    // Debug creep status every 20 ticks
+    // Display clean status dashboard every 20 ticks
     if (Game.time % 20 === 0) {
-        console.log(`RCL ${room.controller.level}: Miners: ${creeps.miner.length}, Haulers: ${creeps.hauler.length}, Upgraders: ${creeps.upgrader.length}, Builders: ${creeps.builder.length}`);
-        
-        // Show what each creep is doing
-        for (const name in Game.creeps) {
-            const creep = Game.creeps[name];
-            const energy = creep.store[RESOURCE_ENERGY];
-            const capacity = creep.store.getCapacity();
-            console.log(`${creep.name} (${creep.memory.role}): ${energy}/${capacity} energy at ${creep.pos.x},${creep.pos.y}`);
-        }
+        displayStatusDashboard(room, creeps);
     }
 
     // Run creep logic
@@ -401,26 +393,19 @@ function spawnCreeps(spawn, creeps) {
         builder: bodies.builder.reduce((cost, part) => cost + (part === WORK ? 100 : part === CARRY ? 50 : 50), 0)
     };
     
-    console.log(`RCL ${rcl}: Energy ${energyAvailable}/${energyCapacity}, Costs: M:${bodyCosts.miner} H:${bodyCosts.hauler} U:${bodyCosts.upgrader} B:${bodyCosts.builder}`);
-    
     // Simple spawn priority: miner > hauler > upgrader > builder
     if (creeps.miner.length < populationTargets.miner) {
         if (spawn.canCreateCreep(bodies.miner) === OK) {
             const name = 'mine:' + generateHexId();
             spawn.createCreep(bodies.miner, name, { role: 'miner' });
-            console.log(`Spawning miner (${creeps.miner.length + 1}/${populationTargets.miner})`);
             return;
-        } else {
-            console.log(`Cannot spawn miner - need ${bodies.miner.length * 50} energy, have ${spawn.room.energyAvailable}/${energyCapacity}`);
         }
     }
-    const popData = room.memory.populationData;
     
     if (creeps.hauler.length < populationTargets.hauler) {
         if (spawn.canCreateCreep(bodies.hauler) === OK) {
             const name = 'haul:' + generateHexId();
             spawn.createCreep(bodies.hauler, name, { role: 'hauler' });
-            console.log(`Spawning hauler (${creeps.hauler.length + 1}/${populationTargets.hauler})`);
             return;
         }
     }
@@ -429,7 +414,6 @@ function spawnCreeps(spawn, creeps) {
         if (spawn.canCreateCreep(bodies.upgrader) === OK) {
             const name = 'upgr:' + generateHexId();
             spawn.createCreep(bodies.upgrader, name, { role: 'upgrader' });
-            console.log(`Spawning upgrader (${creeps.upgrader.length + 1}/${populationTargets.upgrader})`);
             return;
         }
     }
@@ -438,7 +422,6 @@ function spawnCreeps(spawn, creeps) {
         if (spawn.canCreateCreep(bodies.builder) === OK) {
             const name = 'bldr:' + generateHexId();
             spawn.createCreep(bodies.builder, name, { role: 'builder' });
-            console.log(`Spawning builder (${creeps.builder.length + 1}/${populationTargets.builder})`);
             return;
         }
     }
@@ -516,9 +499,16 @@ function createMissingConstructionSites(room) {
     const existingConstructionSites = room.find(FIND_CONSTRUCTION_SITES).length;
     if (existingConstructionSites >= 5) return; // Max 5 construction sites at once
     
+    // Filter structures by current RCL to avoid error spam
+    const rcl = room.controller.level;
+    const allowedStructures = getAllowedStructuresByRCL(rcl);
+    
     let created = 0;
     for (const planned of room.memory.plannedStructures) {
         if (created >= 3) break; // Create max 3 per tick to avoid CPU spike
+        
+        // Skip structures not allowed at current RCL
+        if (!allowedStructures.includes(planned.type)) continue;
         
         const pos = new RoomPosition(planned.x, planned.y, room.name);
         const structures = pos.lookFor(LOOK_STRUCTURES);
@@ -531,13 +521,94 @@ function createMissingConstructionSites(room) {
         if (!hasStructure && !hasConstructionSite) {
             const result = room.createConstructionSite(pos.x, pos.y, planned.type);
             if (result === OK) {
-                console.log(`Created construction site for ${planned.type} at ${pos.x},${pos.y}`);
                 created++;
-            } else if (result !== ERR_FULL && result !== ERR_INVALID_TARGET) {
-                console.log(`Failed to create construction site for ${planned.type}: ${result}`);
             }
         }
     }
+}
+
+// Helper function: Get allowed structures by RCL to prevent construction errors
+function getAllowedStructuresByRCL(rcl) {
+    const baseStructures = [STRUCTURE_ROAD, STRUCTURE_CONTAINER, STRUCTURE_EXTENSION];
+    
+    switch (rcl) {
+        case 1:
+            return [...baseStructures];
+        case 2:
+            return [...baseStructures, STRUCTURE_RAMPART, STRUCTURE_WALL];
+        case 3:
+            return [...baseStructures, STRUCTURE_RAMPART, STRUCTURE_WALL, STRUCTURE_TOWER];
+        case 4:
+            return [...baseStructures, STRUCTURE_RAMPART, STRUCTURE_WALL, STRUCTURE_TOWER, STRUCTURE_STORAGE];
+        case 5:
+            return [...baseStructures, STRUCTURE_RAMPART, STRUCTURE_WALL, STRUCTURE_TOWER, STRUCTURE_STORAGE, STRUCTURE_LINK];
+        case 6:
+            return [...baseStructures, STRUCTURE_RAMPART, STRUCTURE_WALL, STRUCTURE_TOWER, STRUCTURE_STORAGE, STRUCTURE_LINK, STRUCTURE_EXTRACTOR, STRUCTURE_LAB];
+        case 7:
+            return [...baseStructures, STRUCTURE_RAMPART, STRUCTURE_WALL, STRUCTURE_TOWER, STRUCTURE_STORAGE, STRUCTURE_LINK, STRUCTURE_EXTRACTOR, STRUCTURE_LAB, STRUCTURE_FACTORY];
+        case 8:
+            return [...baseStructures, STRUCTURE_RAMPART, STRUCTURE_WALL, STRUCTURE_TOWER, STRUCTURE_STORAGE, STRUCTURE_LINK, STRUCTURE_EXTRACTOR, STRUCTURE_LAB, STRUCTURE_FACTORY, STRUCTURE_TERMINAL, STRUCTURE_OBSERVER, STRUCTURE_POWER_SPAWN, STRUCTURE_NUKER];
+        default:
+            return baseStructures;
+    }
+}
+
+// Clean status dashboard
+function displayStatusDashboard(room, creeps) {
+    const rcl = room.controller.level;
+    const progress = room.controller.progress;
+    const progressTotal = room.controller.progressTotal;
+    const energyAvailable = room.energyAvailable;
+    const energyCapacity = room.energyCapacityAvailable;
+    
+    // Calculate progress percentage
+    const progressPercent = ((progress / progressTotal) * 100).toFixed(1);
+    
+    // Count construction sites
+    const constructionSites = room.find(FIND_CONSTRUCTION_SITES).length;
+    
+    // Calculate energy flow (miners should be generating ~10 energy/tick per source)
+    const expectedEnergyPerTick = room.find(FIND_SOURCES).length * 10;
+    
+    // Check hauler efficiency (are they moving energy?)
+    const busyHaulers = creeps.hauler.filter(h => h.store[RESOURCE_ENERGY] > 0).length;
+    const idleHaulers = creeps.hauler.length - busyHaulers;
+    
+    console.log(`\n=== BASE STATUS RCL ${rcl} ===`);
+    console.log(`Controller: ${progress}/${progressTotal} (${progressPercent}%) - ${progressTotal - progress} to next RCL`);
+    console.log(`Energy: ${energyAvailable}/${energyCapacity} (${((energyAvailable/energyCapacity)*100).toFixed(0)}%)`);
+    console.log(`Expected Flow: ${expectedEnergyPerTick} energy/tick from ${room.find(FIND_SOURCES).length} sources`);
+    
+    console.log(`\n--- POPULATION ---`);
+    const targets = getPopulationByRCL(rcl);
+    console.log(`Miners: ${creeps.miner.length}/${targets.miner} | Haulers: ${creeps.hauler.length}/${targets.hauler} (${busyHaulers} busy, ${idleHaulers} idle)`);
+    console.log(`Upgraders: ${creeps.upgrader.length}/${targets.upgrader} | Builders: ${creeps.builder.length}/${targets.builder}`);
+    
+    if (constructionSites > 0) {
+        console.log(`\n--- CONSTRUCTION ---`);
+        console.log(`${constructionSites} sites remaining`);
+        
+        // Show what's being built
+        const sites = room.find(FIND_CONSTRUCTION_SITES);
+        const siteTypes = {};
+        sites.forEach(site => {
+            siteTypes[site.structureType] = (siteTypes[site.structureType] || 0) + 1;
+        });
+        const siteList = Object.entries(siteTypes).map(([type, count]) => `${count}x ${type}`).join(', ');
+        console.log(`Building: ${siteList}`);
+    }
+    
+    // Show any issues
+    const issues = [];
+    if (creeps.miner.length < targets.miner) issues.push('Need more miners');
+    if (idleHaulers === creeps.hauler.length && creeps.hauler.length > 0) issues.push('All haulers idle');
+    if (energyAvailable < energyCapacity * 0.3) issues.push('Low energy reserves');
+    
+    if (issues.length > 0) {
+        console.log(`\n⚠️  ISSUES: ${issues.join(', ')}`);
+    }
+    
+    console.log('========================\n');
 }
 
 function runCreep(creep) {
@@ -599,11 +670,7 @@ function runMiner(creep) {
                    structure.pos.getRangeTo(source) <= 2;
         }
     })[0];
-}
 
-function countMissingStructures(room) {
-    if (!room.memory.plannedStructures) return 0;
-    
     if (container) {
         // Move to container position and stay there
         if (creep.pos.isEqualTo(container.pos)) {
@@ -771,7 +838,6 @@ function runHauler(creep) {
                 
                 if (bestSource) {
                     creep.memory.assignedSource = bestSource.id;
-                    console.log(`${creep.name} assigned to source ${bestSource.id} (${leastAssigned + 1} haulers on this source)`);
                 }
             }
             
@@ -888,7 +954,6 @@ function getDistributedEnergyContainer(creep, targets) {
         
         if (bestSource) {
             creep.memory.assignedSource = bestSource.id;
-            console.log(`${creep.name} (${creep.memory.role}) assigned to source ${bestSource.id}`);
         }
         
         return bestContainer;
@@ -978,7 +1043,6 @@ function runBuilder(creep) {
                 target = creep.pos.findClosestByPath(targets);
                 if (target) {
                     creep.memory.buildTarget = target.id;
-                    console.log(`${creep.name} assigned to build ${target.structureType} at ${target.pos.x},${target.pos.y}`);
                 }
             }
         }
@@ -988,10 +1052,7 @@ function runBuilder(creep) {
             if (buildResult === ERR_NOT_IN_RANGE) {
                 creep.moveTo(target, { visualizePathStyle: { stroke: '#ffffff' } });
             } else if (buildResult === OK) {
-                // Log progress occasionally
-                if (Game.time % 10 === 0) {
-                    console.log(`${creep.name} building ${target.structureType} - ${target.progress}/${target.progressTotal}`);
-                }
+                // Building successfully, no need to log every tick
             } else if (buildResult !== OK) {
                 console.log(`Build error: ${buildResult} for creep ${creep.name}`);
                 // Clear assignment on error to try a different site
