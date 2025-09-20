@@ -387,6 +387,7 @@ function spawnCreeps(spawn, creeps) {
     const room = spawn.room;
     const rcl = room.controller.level;
     const energyCapacity = room.energyCapacityAvailable;
+    const energyAvailable = room.energyAvailable;
     
     // Hard-coded population targets based on RCL
     const populationTargets = getPopulationByRCL(rcl);
@@ -415,6 +416,7 @@ function spawnCreeps(spawn, creeps) {
             console.log(`Cannot spawn miner - need ${bodies.miner.length * 50} energy, have ${spawn.room.energyAvailable}/${energyCapacity}`);
         }
     }
+    const popData = room.memory.populationData;
     
     if (creeps.hauler.length < populationTargets.hauler) {
         if (spawn.canCreateCreep(bodies.hauler) === OK) {
@@ -589,7 +591,7 @@ function runMiner(creep) {
             console.log(`WARNING: ${creep.name} forced to share source ${source.id} - check population targets`);
         }
     }
-    
+  
     if (!source) return;
     
     // Find container near this source
@@ -599,6 +601,10 @@ function runMiner(creep) {
                    structure.pos.getRangeTo(source) <= 2;
         }
     })[0];
+}
+
+function countMissingStructures(room) {
+    if (!room.memory.plannedStructures) return 0;
     
     if (container) {
         // Move to container position and stay there
