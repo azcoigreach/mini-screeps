@@ -667,10 +667,24 @@ function runUpgrader(creep) {
                 }
             }
         } else {
-            // No energy sources available, wait near controller
-            const controller = creep.room.controller;
-            if (controller && creep.pos.getRangeTo(controller) > 3) {
-                creep.moveTo(controller, { visualizePathStyle: { stroke: '#ffaa00' } });
+            // No energy sources available, look for dropped energy as fallback
+            const droppedEnergy = creep.room.find(FIND_DROPPED_RESOURCES, {
+                filter: (resource) => {
+                    return resource.resourceType === RESOURCE_ENERGY && resource.amount >= 50;
+                }
+            });
+            
+            if (droppedEnergy.length > 0) {
+                const target = creep.pos.findClosestByPath(droppedEnergy);
+                if (creep.pickup(target) === ERR_NOT_IN_RANGE) {
+                    creep.moveTo(target, { visualizePathStyle: { stroke: '#ffaa00' } });
+                }
+            } else {
+                // No energy sources available, wait near controller
+                const controller = creep.room.controller;
+                if (controller && creep.pos.getRangeTo(controller) > 3) {
+                    creep.moveTo(controller, { visualizePathStyle: { stroke: '#ffaa00' } });
+                }
             }
         }
     }
@@ -725,17 +739,31 @@ function runBuilder(creep) {
                 }
             }
         } else {
-            // No energy sources available, wait near construction sites or controller
-            const constructionSites = creep.room.find(FIND_CONSTRUCTION_SITES);
-            if (constructionSites.length > 0) {
-                const target = creep.pos.findClosestByPath(constructionSites);
-                if (target && creep.pos.getRangeTo(target) > 3) {
+            // No energy sources available, look for dropped energy as fallback
+            const droppedEnergy = creep.room.find(FIND_DROPPED_RESOURCES, {
+                filter: (resource) => {
+                    return resource.resourceType === RESOURCE_ENERGY && resource.amount >= 50;
+                }
+            });
+            
+            if (droppedEnergy.length > 0) {
+                const target = creep.pos.findClosestByPath(droppedEnergy);
+                if (creep.pickup(target) === ERR_NOT_IN_RANGE) {
                     creep.moveTo(target, { visualizePathStyle: { stroke: '#ffaa00' } });
                 }
             } else {
-                const controller = creep.room.controller;
-                if (controller && creep.pos.getRangeTo(controller) > 3) {
-                    creep.moveTo(controller, { visualizePathStyle: { stroke: '#ffaa00' } });
+                // No energy sources available, wait near construction sites or controller
+                const constructionSites = creep.room.find(FIND_CONSTRUCTION_SITES);
+                if (constructionSites.length > 0) {
+                    const target = creep.pos.findClosestByPath(constructionSites);
+                    if (target && creep.pos.getRangeTo(target) > 3) {
+                        creep.moveTo(target, { visualizePathStyle: { stroke: '#ffaa00' } });
+                    }
+                } else {
+                    const controller = creep.room.controller;
+                    if (controller && creep.pos.getRangeTo(controller) > 3) {
+                        creep.moveTo(controller, { visualizePathStyle: { stroke: '#ffaa00' } });
+                    }
                 }
             }
         }
