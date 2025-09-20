@@ -59,6 +59,19 @@ module.exports.loop = function () {
     // Spawn creeps based on needs
     spawnCreeps(spawn, creeps);
 
+    // Debug creep status every 20 ticks
+    if (Game.time % 20 === 0) {
+        console.log(`RCL ${room.controller.level}: Miners: ${creeps.miner.length}, Haulers: ${creeps.hauler.length}, Upgraders: ${creeps.upgrader.length}, Builders: ${creeps.builder.length}`);
+        
+        // Show what each creep is doing
+        for (const name in Game.creeps) {
+            const creep = Game.creeps[name];
+            const energy = creep.store[RESOURCE_ENERGY];
+            const capacity = creep.store.getCapacity();
+            console.log(`${creep.name} (${creep.memory.role}): ${energy}/${capacity} energy at ${creep.pos.x},${creep.pos.y}`);
+        }
+    }
+
     // Run creep logic
     for (const name in Game.creeps) {
         const creep = Game.creeps[name];
@@ -531,58 +544,43 @@ function runUpgrader(creep) {
             console.log(`Upgrade error: ${upgradeResult} for creep ${creep.name}`);
         }
     } else {
-        // Get energy from haulers, extensions, containers, or storage
-        const haulers = creep.room.find(FIND_MY_CREEPS, {
-            filter: c => c.memory.role === 'hauler' && c.store[RESOURCE_ENERGY] > 0
+        // Get energy from extensions, containers, or storage (haulers fill these)
+        const targets = creep.room.find(FIND_STRUCTURES, {
+            filter: (structure) => {
+                return (structure.structureType === STRUCTURE_EXTENSION ||
+                        structure.structureType === STRUCTURE_CONTAINER ||
+                        structure.structureType === STRUCTURE_STORAGE) &&
+                       structure.store[RESOURCE_ENERGY] > 0;
+            }
         });
         
-        const extensions = creep.room.find(FIND_MY_STRUCTURES, {
-            filter: s => s.structureType === STRUCTURE_EXTENSION && s.store[RESOURCE_ENERGY] > 0
-        });
-        
-        const containers = creep.room.find(FIND_STRUCTURES, {
-            filter: s => s.structureType === STRUCTURE_CONTAINER && s.store[RESOURCE_ENERGY] > 0
-        });
-        
-        const storage = creep.room.find(FIND_MY_STRUCTURES, {
-            filter: s => s.structureType === STRUCTURE_STORAGE && s.store[RESOURCE_ENERGY] > 0
-        });
-        
-        // Priority: extensions > containers > storage > haulers
-        let target = null;
-        if (extensions.length > 0) {
-            target = creep.pos.findClosestByPath(extensions);
-        } else if (containers.length > 0) {
-            target = creep.pos.findClosestByPath(containers);
-        } else if (storage.length > 0) {
-            target = creep.pos.findClosestByPath(storage);
-        } else if (haulers.length > 0) {
-            target = creep.pos.findClosestByPath(haulers);
-        }
-        
-        if (target) {
-            if (target.structureType) {
-                // It's a structure, withdraw from it
+        if (targets.length > 0) {
+            // Prioritize extensions, then containers, then storage
+            const extensions = targets.filter(t => t.structureType === STRUCTURE_EXTENSION);
+            const containers = targets.filter(t => t.structureType === STRUCTURE_CONTAINER);
+            
+            let target;
+            if (extensions.length > 0) {
+                target = creep.pos.findClosestByPath(extensions);
+            } else if (containers.length > 0) {
+                target = creep.pos.findClosestByPath(containers);
+            } else {
+                target = creep.pos.findClosestByPath(targets);
+            }
+            
+            if (target) {
                 const withdrawResult = creep.withdraw(target, RESOURCE_ENERGY);
                 if (withdrawResult === ERR_NOT_IN_RANGE) {
                     creep.moveTo(target, { visualizePathStyle: { stroke: '#ffaa00' } });
                 } else if (withdrawResult !== OK && withdrawResult !== ERR_NOT_ENOUGH_RESOURCES) {
                     console.log(`Upgrader withdraw error: ${withdrawResult}`);
                 }
-            } else {
-                // It's a hauler creep, get energy from it
-                const transferResult = target.transfer(creep, RESOURCE_ENERGY);
-                if (transferResult === ERR_NOT_IN_RANGE) {
-                    creep.moveTo(target, { visualizePathStyle: { stroke: '#ffaa00' } });
-                } else if (transferResult !== OK && transferResult !== ERR_NOT_ENOUGH_RESOURCES) {
-                    console.log(`Upgrader transfer error: ${transferResult}`);
-                }
             }
         } else {
-            // No energy available, move to spawn and wait
-            const spawn = creep.room.find(FIND_MY_SPAWNS)[0];
-            if (spawn && creep.pos.getRangeTo(spawn) > 1) {
-                creep.moveTo(spawn, { visualizePathStyle: { stroke: '#ffaa00' } });
+            // No energy sources available, wait near controller
+            const controller = creep.room.controller;
+            if (controller && creep.pos.getRangeTo(controller) > 3) {
+                creep.moveTo(controller, { visualizePathStyle: { stroke: '#ffaa00' } });
             }
         }
     }
@@ -615,58 +613,51 @@ function runBuilder(creep) {
             }
         }
     } else {
-        // Get energy from haulers, extensions, containers, or storage
-        const haulers = creep.room.find(FIND_MY_CREEPS, {
-            filter: c => c.memory.role === 'hauler' && c.store[RESOURCE_ENERGY] > 0
+        // Get energy from extensions, containers, or storage (haulers fill these)
+        const targets = creep.room.find(FIND_STRUCTURES, {
+            filter: (structure) => {
+                return (structure.structureType === STRUCTURE_EXTENSION ||
+                        structure.structureType === STRUCTURE_CONTAINER ||
+                        structure.structureType === STRUCTURE_STORAGE) &&
+                       structure.store[RESOURCE_ENERGY] > 0;
+            }
         });
         
-        const extensions = creep.room.find(FIND_MY_STRUCTURES, {
-            filter: s => s.structureType === STRUCTURE_EXTENSION && s.store[RESOURCE_ENERGY] > 0
-        });
-        
-        const containers = creep.room.find(FIND_STRUCTURES, {
-            filter: s => s.structureType === STRUCTURE_CONTAINER && s.store[RESOURCE_ENERGY] > 0
-        });
-        
-        const storage = creep.room.find(FIND_MY_STRUCTURES, {
-            filter: s => s.structureType === STRUCTURE_STORAGE && s.store[RESOURCE_ENERGY] > 0
-        });
-        
-        // Priority: extensions > containers > storage > haulers
-        let target = null;
-        if (extensions.length > 0) {
-            target = creep.pos.findClosestByPath(extensions);
-        } else if (containers.length > 0) {
-            target = creep.pos.findClosestByPath(containers);
-        } else if (storage.length > 0) {
-            target = creep.pos.findClosestByPath(storage);
-        } else if (haulers.length > 0) {
-            target = creep.pos.findClosestByPath(haulers);
-        }
-        
-        if (target) {
-            if (target.structureType) {
-                // It's a structure, withdraw from it
+        if (targets.length > 0) {
+            // Prioritize extensions, then containers, then storage
+            const extensions = targets.filter(t => t.structureType === STRUCTURE_EXTENSION);
+            const containers = targets.filter(t => t.structureType === STRUCTURE_CONTAINER);
+            
+            let target;
+            if (extensions.length > 0) {
+                target = creep.pos.findClosestByPath(extensions);
+            } else if (containers.length > 0) {
+                target = creep.pos.findClosestByPath(containers);
+            } else {
+                target = creep.pos.findClosestByPath(targets);
+            }
+            
+            if (target) {
                 const withdrawResult = creep.withdraw(target, RESOURCE_ENERGY);
                 if (withdrawResult === ERR_NOT_IN_RANGE) {
                     creep.moveTo(target, { visualizePathStyle: { stroke: '#ffaa00' } });
                 } else if (withdrawResult !== OK && withdrawResult !== ERR_NOT_ENOUGH_RESOURCES) {
                     console.log(`Builder withdraw error: ${withdrawResult}`);
                 }
-            } else {
-                // It's a hauler creep, get energy from it
-                const transferResult = target.transfer(creep, RESOURCE_ENERGY);
-                if (transferResult === ERR_NOT_IN_RANGE) {
-                    creep.moveTo(target, { visualizePathStyle: { stroke: '#ffaa00' } });
-                } else if (transferResult !== OK && transferResult !== ERR_NOT_ENOUGH_RESOURCES) {
-                    console.log(`Builder transfer error: ${transferResult}`);
-                }
             }
         } else {
-            // No energy available, move to spawn and wait
-            const spawn = creep.room.find(FIND_MY_SPAWNS)[0];
-            if (spawn && creep.pos.getRangeTo(spawn) > 1) {
-                creep.moveTo(spawn, { visualizePathStyle: { stroke: '#ffaa00' } });
+            // No energy sources available, wait near construction sites or controller
+            const constructionSites = creep.room.find(FIND_CONSTRUCTION_SITES);
+            if (constructionSites.length > 0) {
+                const target = creep.pos.findClosestByPath(constructionSites);
+                if (target && creep.pos.getRangeTo(target) > 3) {
+                    creep.moveTo(target, { visualizePathStyle: { stroke: '#ffaa00' } });
+                }
+            } else {
+                const controller = creep.room.controller;
+                if (controller && creep.pos.getRangeTo(controller) > 3) {
+                    creep.moveTo(controller, { visualizePathStyle: { stroke: '#ffaa00' } });
+                }
             }
         }
     }
