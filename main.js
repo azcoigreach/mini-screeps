@@ -492,7 +492,6 @@ function runMiner(creep) {
             creep.memory.sourceId = source.id;
         }
     }
-
     if (!source) return;
     
     // Find container near this source
