@@ -24,17 +24,11 @@
  */
 
 module.exports.loop = function () {
-    // Clean up memory with error handling
-    try {
-        for (const name in Memory.creeps) {
-            if (!Game.creeps[name]) {
-                delete Memory.creeps[name];
-            }
+    // Clean up memory
+    for (const name in Memory.creeps) {
+        if (!Game.creeps[name]) {
+            delete Memory.creeps[name];
         }
-    } catch (error) {
-        console.log('Memory cleanup error:', error);
-        // Reset memory if corrupted
-        Memory.creeps = {};
     }
 
     // Get the spawn and room
@@ -42,7 +36,6 @@ module.exports.loop = function () {
     if (!spawn) return;
     
     const room = spawn.room;
-    const controller = room.controller;
     
     // Count creeps by role
     const creeps = {
@@ -53,24 +46,15 @@ module.exports.loop = function () {
         builder: _.filter(Game.creeps, creep => creep.memory.role === 'builder')
     };
 
-    // Plan base layout if not done
+    // Plan base layout once
     if (!room.memory.basePlanned) {
-        try {
-            planBase(room);
-            room.memory.basePlanned = true;
-        } catch (error) {
-            console.log('Base planning error:', error);
-        }
+        planBase(room);
+        room.memory.basePlanned = true;
     }
 
-    // Calculate and cache essential data only once for CPU efficiency
-    if (!room.memory.baseSetup && room.memory.basePlanned) {
-        try {
-            setupBaseData(room);
-            room.memory.baseSetup = true;
-        } catch (error) {
-            console.log('Base setup error:', error);
-        }
+    // Create construction sites
+    if (Game.time % 10 === 0) {
+        createMissingConstructionSites(room);
     }
 
     // Spawn creeps based on needs
@@ -79,11 +63,7 @@ module.exports.loop = function () {
     // Run creep logic
     for (const name in Game.creeps) {
         const creep = Game.creeps[name];
-        try {
-            runCreep(creep);
-        } catch (error) {
-            console.log(`Error running creep ${name}: ${error}`);
-        }
+        runCreep(creep);
     }
 
     // CPU management for Pixel earning
@@ -209,20 +189,6 @@ function findControllerContainerPosition(controller) {
     return null;
 }
 
-function setupBaseData(room) {
-    // Minimal setup - just cache essential room data for CPU efficiency
-    const sources = room.find(FIND_SOURCES);
-    const spawn = room.find(FIND_MY_SPAWNS)[0];
-    
-    room.memory.roomData = {
-        sourceCount: sources.length,
-        maxEnergyPerTick: sources.length * 10, // 10 energy per source per tick
-        setupComplete: true
-    };
-    
-    console.log(`Base data setup complete: ${sources.length} sources, ${sources.length * 10} max energy/tick`);
-}
-
 function planRoads(room) {
     const sources = room.find(FIND_SOURCES);
     const spawn = room.find(FIND_MY_SPAWNS)[0];
@@ -286,247 +252,130 @@ function generateHexId() {
     return Math.floor(Math.random() * 65536).toString(16).padStart(4, '0');
 }
 
-// CPU-optimized population control with energy budgeting and defense allocation
+// Simplified population control based on room controller level
 function spawnCreeps(spawn, creeps) {
     const room = spawn.room;
-    const energyCapacity = room.energyCapacityAvailable;
-    const energyAvailable = room.energyAvailable;
-    
-    // Cache population data to avoid recalculation (CPU optimization)
-    if (!room.memory.populationData || Game.time % 50 === 0) {
-        calculatePopulationData(room);
-    }
-    const popData = room.memory.populationData;
-    
-    // Emergency bootstrap: if we have no creeps at all, spawn minimal recovery force
-    const totalCreeps = Object.keys(Game.creeps).filter(name => Game.creeps[name].room.name === room.name).length;
-    if (totalCreeps === 0) {
-        return emergencyBootstrap(spawn);
-    }
-    
-    // Normal bootstrap: basic infrastructure phase
-    if (!popData.hasInfrastructure || energyCapacity < 550) {
-        console.log(`Bootstrap mode: hasInfrastructure=${popData.hasInfrastructure}, energyCapacity=${energyCapacity}`);
-        return normalBootstrap(spawn, creeps, popData);
-    }
-    
-    // Production phase: optimized population control
-    return productionSpawn(spawn, creeps, popData);
-}
-
-// Calculate all population requirements once per 50 ticks to save CPU
-function calculatePopulationData(room) {
-    const energyCapacity = room.energyCapacityAvailable;
-    const sources = room.find(FIND_SOURCES);
-    const towers = room.find(FIND_MY_STRUCTURES, { filter: s => s.structureType === STRUCTURE_TOWER });
-    const containers = room.find(FIND_STRUCTURES, { filter: s => s.structureType === STRUCTURE_CONTAINER });
-    const sourceContainers = containers.filter(c => sources.some(s => s.pos.getRangeTo(c) <= 2));
-    
-    // Infrastructure status
-    const hasInfrastructure = sourceContainers.length >= 2 && energyCapacity >= 550;
-    
-    // Energy calculations (fixed values for CPU efficiency)
-    const BASE_ENERGY_PER_TICK = 20; // 2 sources * 10 energy/tick
-    const TOWER_ENERGY_PER_TICK = towers.length * 2; // 2 energy/tick per tower for maintenance/defense
-    const REPAIR_ENERGY_PER_TICK = 5; // Fixed allocation for repairs
-    const UPGRADER_MIN_ENERGY = 1; // Minimum to prevent controller downgrade
-    
-    // Calculate optimal populations based on energy capacity and efficiency
-    let minerNeeds, haulerNeeds, upgraderNeeds, builderNeeds;
-    
-    if (energyCapacity >= 1800) { // RCL 6+
-        minerNeeds = 2; // One per source
-        haulerNeeds = 2; // Optimized large haulers
-        upgraderNeeds = 4; // Strong upgrade force
-        builderNeeds = 1; // One efficient builder
-    } else if (energyCapacity >= 1300) { // RCL 5
-        minerNeeds = 2;
-        haulerNeeds = 2;
-        upgraderNeeds = 3;
-        builderNeeds = 1;
-    } else if (energyCapacity >= 800) { // RCL 4
-        minerNeeds = 2;
-        haulerNeeds = 2;
-        upgraderNeeds = 2;
-        builderNeeds = 1;
-    } else { // RCL 3 and below
-        minerNeeds = 2;
-        haulerNeeds = 3; // More small haulers
-        upgraderNeeds = 2;
-        builderNeeds = 1;
-    }
-    
-    // Energy allocation
-    const towerAllocation = TOWER_ENERGY_PER_TICK;
-    const repairAllocation = REPAIR_ENERGY_PER_TICK;
-    const availableForWork = Math.max(0, BASE_ENERGY_PER_TICK - towerAllocation - repairAllocation);
-    
-    // Construction needs check (cached to avoid repeated searches)
-    const missingStructures = countMissingStructures(room);
-    const constructionSites = room.find(FIND_CONSTRUCTION_SITES).length;
-    const hasConstructionWork = missingStructures > 0 || constructionSites > 0;
-    
-    // Builder allocation: 0 if no work, or enough for 1-2 builders
-    const builderAllocation = hasConstructionWork ? Math.min(8, availableForWork * 0.4) : 0;
-    const upgraderAllocation = Math.max(UPGRADER_MIN_ENERGY, availableForWork - builderAllocation);
-    
-    // Adjust builder/upgrader counts based on available energy
-    if (!hasConstructionWork) builderNeeds = 0;
-    if (upgraderAllocation < 4) upgraderNeeds = Math.max(1, upgraderNeeds - 1);
-    
-    room.memory.populationData = {
-        hasInfrastructure,
-        energyCapacity,
-        needs: { miner: minerNeeds, hauler: haulerNeeds, upgrader: upgraderNeeds, builder: builderNeeds },
-        energyBudget: {
-            total: BASE_ENERGY_PER_TICK,
-            towers: towerAllocation,
-            repairs: repairAllocation,
-            builders: builderAllocation,
-            upgraders: upgraderAllocation
-        },
-        hasConstructionWork,
-        missingStructures
-    };
-}
-
-// Emergency recovery: spawn one harvester immediately
-function emergencyBootstrap(spawn) {
-    if (spawn.canCreateCreep([WORK, CARRY, MOVE]) === OK) {
-        const name = 'harv:' + generateHexId();
-        spawn.createCreep([WORK, CARRY, MOVE], name, { role: 'harvester' });
-        console.log('🚨 EMERGENCY: Spawning recovery harvester');
-        return true;
-    }
-    return false;
-}
-
-// Normal bootstrap: build up basic infrastructure
-function normalBootstrap(spawn, creeps, popData) {
-    const room = spawn.room;
+    const rcl = room.controller.level;
     const energyCapacity = room.energyCapacityAvailable;
     
-    // Create construction sites for planned structures if they don't exist
-    createMissingConstructionSites(room);
+    // Hard-coded population targets based on RCL
+    const populationTargets = getPopulationByRCL(rcl);
+    const bodies = getBodiesByEnergyCapacity(energyCapacity);
     
-    // Bootstrap population targets (energy-efficient)
-    const bootstrapNeeds = {
-        harvester: Math.min(2, Math.max(1, Math.floor(energyCapacity / 250))),
-        upgrader: 1,
-        builder: popData.hasConstructionWork ? 1 : 0
-    };
-    
-    // Spawn priority: harvester > builder > upgrader
-    if (creeps.harvester.length < bootstrapNeeds.harvester) {
-        if (spawn.canCreateCreep([WORK, CARRY, MOVE]) === OK) {
+    // Simple spawn priority: harvester > miner > hauler > upgrader > builder
+    if (creeps.harvester.length < populationTargets.harvester) {
+        if (spawn.canCreateCreep(bodies.harvester) === OK) {
             const name = 'harv:' + generateHexId();
-            spawn.createCreep([WORK, CARRY, MOVE], name, { role: 'harvester' });
-            console.log(`Bootstrap: Spawning harvester (${creeps.harvester.length + 1}/${bootstrapNeeds.harvester})`);
-            return true;
+            spawn.createCreep(bodies.harvester, name, { role: 'harvester' });
+            console.log(`Spawning harvester (${creeps.harvester.length + 1}/${populationTargets.harvester})`);
+            return;
         }
-    } else if (creeps.builder.length < bootstrapNeeds.builder) {
-        if (spawn.canCreateCreep([WORK, CARRY, MOVE]) === OK) {
-            const name = 'bldr:' + generateHexId();
-            spawn.createCreep([WORK, CARRY, MOVE], name, { role: 'builder' });
-            console.log('Bootstrap: Spawning builder');
-            return true;
+    }
+    
+    if (creeps.miner.length < populationTargets.miner) {
+        if (spawn.canCreateCreep(bodies.miner) === OK) {
+            const name = 'mine:' + generateHexId();
+            spawn.createCreep(bodies.miner, name, { role: 'miner' });
+            console.log(`Spawning miner (${creeps.miner.length + 1}/${populationTargets.miner})`);
+            return;
         }
-    } else if (creeps.upgrader.length < bootstrapNeeds.upgrader) {
-        if (spawn.canCreateCreep([WORK, CARRY, MOVE]) === OK) {
+    }
+    
+    if (creeps.hauler.length < populationTargets.hauler) {
+        if (spawn.canCreateCreep(bodies.hauler) === OK) {
+            const name = 'haul:' + generateHexId();
+            spawn.createCreep(bodies.hauler, name, { role: 'hauler' });
+            console.log(`Spawning hauler (${creeps.hauler.length + 1}/${populationTargets.hauler})`);
+            return;
+        }
+    }
+    
+    if (creeps.upgrader.length < populationTargets.upgrader) {
+        if (spawn.canCreateCreep(bodies.upgrader) === OK) {
             const name = 'upgr:' + generateHexId();
-            spawn.createCreep([WORK, CARRY, MOVE], name, { role: 'upgrader' });
-            console.log('Bootstrap: Spawning upgrader');
-            return true;
+            spawn.createCreep(bodies.upgrader, name, { role: 'upgrader' });
+            console.log(`Spawning upgrader (${creeps.upgrader.length + 1}/${populationTargets.upgrader})`);
+            return;
         }
     }
-    return false;
+    
+    if (creeps.builder.length < populationTargets.builder) {
+        if (spawn.canCreateCreep(bodies.builder) === OK) {
+            const name = 'bldr:' + generateHexId();
+            spawn.createCreep(bodies.builder, name, { role: 'builder' });
+            console.log(`Spawning builder (${creeps.builder.length + 1}/${populationTargets.builder})`);
+            return;
+        }
+    }
 }
 
-// Production phase: optimized high-efficiency spawning
-function productionSpawn(spawn, creeps, popData) {
-    const needs = popData.needs;
-    const energyCapacity = spawn.room.energyCapacityAvailable;
-    
-    // Pre-calculated body parts for efficiency (no recalculation every tick)
-    const bodies = getOptimalBodies(energyCapacity);
-    
-    // Spawn priority: miner > hauler > upgrader > builder
-    if (creeps.miner.length < needs.miner && spawn.canCreateCreep(bodies.miner) === OK) {
-        const name = 'mine:' + generateHexId();
-        spawn.createCreep(bodies.miner, name, { role: 'miner' });
-        console.log(`Production: Spawning miner (${creeps.miner.length + 1}/${needs.miner})`);
-        return true;
-    } else if (creeps.hauler.length < needs.hauler && spawn.canCreateCreep(bodies.hauler) === OK) {
-        const name = 'haul:' + generateHexId();
-        spawn.createCreep(bodies.hauler, name, { role: 'hauler' });
-        console.log(`Production: Spawning hauler (${creeps.hauler.length + 1}/${needs.hauler})`);
-        return true;
-    } else if (creeps.upgrader.length < needs.upgrader && spawn.canCreateCreep(bodies.upgrader) === OK) {
-        const name = 'upgr:' + generateHexId();
-        spawn.createCreep(bodies.upgrader, name, { role: 'upgrader' });
-        console.log(`Production: Spawning upgrader (${creeps.upgrader.length + 1}/${needs.upgrader})`);
-        return true;
-    } else if (creeps.builder.length < needs.builder && spawn.canCreateCreep(bodies.builder) === OK) {
-        const name = 'bldr:' + generateHexId();
-        spawn.createCreep(bodies.builder, name, { role: 'builder' });
-        console.log(`Production: Spawning builder (${creeps.builder.length + 1}/${needs.builder})`);
-        return true;
+// Hard-coded population targets by RCL
+function getPopulationByRCL(rcl) {
+    switch (rcl) {
+        case 1:
+            return { harvester: 2, miner: 0, hauler: 0, upgrader: 1, builder: 1 };
+        case 2:
+            return { harvester: 2, miner: 0, hauler: 0, upgrader: 2, builder: 1 };
+        case 3:
+            return { harvester: 1, miner: 2, hauler: 2, upgrader: 2, builder: 1 };
+        case 4:
+            return { harvester: 0, miner: 2, hauler: 2, upgrader: 3, builder: 1 };
+        case 5:
+            return { harvester: 0, miner: 2, hauler: 2, upgrader: 4, builder: 1 };
+        case 6:
+            return { harvester: 0, miner: 2, hauler: 2, upgrader: 4, builder: 1 };
+        case 7:
+            return { harvester: 0, miner: 2, hauler: 3, upgrader: 5, builder: 2 };
+        case 8:
+            return { harvester: 0, miner: 2, hauler: 3, upgrader: 6, builder: 2 };
+        default:
+            return { harvester: 1, miner: 0, hauler: 0, upgrader: 1, builder: 1 };
     }
-    
-    // Log status every 100 ticks
-    if (Game.time % 100 === 0) {
-        const budget = popData.energyBudget;
-        console.log(`Population: M:${creeps.miner.length}/${needs.miner} H:${creeps.hauler.length}/${needs.hauler} U:${creeps.upgrader.length}/${needs.upgrader} B:${creeps.builder.length}/${needs.builder}`);
-        console.log(`Energy Budget: ${budget.total}e/t → T:${budget.towers} R:${budget.repairs} B:${budget.builders} U:${budget.upgraders}`);
-    }
-    
-    return false;
 }
 
-// Pre-calculated optimal body parts based on energy capacity
-function getOptimalBodies(energyCapacity) {
+// Hard-coded body configurations by energy capacity
+function getBodiesByEnergyCapacity(energyCapacity) {
     if (energyCapacity >= 1800) { // RCL 6+
         return {
-            miner: [WORK, WORK, WORK, WORK, WORK, MOVE], // 5W1M - max efficiency
+            harvester: [WORK, WORK, WORK, CARRY, CARRY, MOVE, MOVE, MOVE], // 3W2C3M
+            miner: [WORK, WORK, WORK, WORK, WORK, MOVE], // 5W1M
             hauler: [CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, MOVE, MOVE, MOVE, MOVE], // 8C4M
             upgrader: [WORK, WORK, WORK, CARRY, CARRY, MOVE, MOVE, MOVE], // 3W2C3M
             builder: [WORK, WORK, WORK, CARRY, CARRY, MOVE, MOVE, MOVE] // 3W2C3M
         };
     } else if (energyCapacity >= 1300) { // RCL 5
         return {
-            miner: [WORK, WORK, WORK, WORK, WORK, MOVE],
-            hauler: [CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, MOVE, MOVE, MOVE],
-            upgrader: [WORK, WORK, CARRY, CARRY, MOVE, MOVE],
-            builder: [WORK, WORK, CARRY, CARRY, MOVE, MOVE]
+            harvester: [WORK, WORK, CARRY, CARRY, MOVE, MOVE], // 2W2C2M
+            miner: [WORK, WORK, WORK, WORK, WORK, MOVE], // 5W1M
+            hauler: [CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, MOVE, MOVE, MOVE], // 6C3M
+            upgrader: [WORK, WORK, CARRY, CARRY, MOVE, MOVE], // 2W2C2M
+            builder: [WORK, WORK, CARRY, CARRY, MOVE, MOVE] // 2W2C2M
         };
     } else if (energyCapacity >= 800) { // RCL 4
         return {
-            miner: [WORK, WORK, WORK, WORK, WORK, MOVE],
-            hauler: [CARRY, CARRY, CARRY, CARRY, MOVE, MOVE],
-            upgrader: [WORK, WORK, CARRY, MOVE],
-            builder: [WORK, WORK, CARRY, MOVE]
+            harvester: [WORK, WORK, CARRY, MOVE], // 2W1C1M
+            miner: [WORK, WORK, WORK, WORK, WORK, MOVE], // 5W1M
+            hauler: [CARRY, CARRY, CARRY, CARRY, MOVE, MOVE], // 4C2M
+            upgrader: [WORK, WORK, CARRY, MOVE], // 2W1C1M
+            builder: [WORK, WORK, CARRY, MOVE] // 2W1C1M
         };
-    } else { // RCL 3 and below
+    } else if (energyCapacity >= 550) { // RCL 3
         return {
-            miner: [WORK, WORK, WORK, MOVE],
-            hauler: [CARRY, CARRY, MOVE],
-            upgrader: [WORK, CARRY, MOVE],
-            builder: [WORK, CARRY, MOVE]
+            harvester: [WORK, CARRY, MOVE], // 1W1C1M
+            miner: [WORK, WORK, WORK, WORK, WORK, MOVE], // 5W1M
+            hauler: [CARRY, CARRY, MOVE], // 2C1M
+            upgrader: [WORK, CARRY, MOVE], // 1W1C1M
+            builder: [WORK, CARRY, MOVE] // 1W1C1M
+        };
+    } else { // RCL 1-2
+        return {
+            harvester: [WORK, CARRY, MOVE], // 1W1C1M
+            miner: [WORK, WORK, WORK, MOVE], // 3W1M
+            hauler: [CARRY, CARRY, MOVE], // 2C1M
+            upgrader: [WORK, CARRY, MOVE], // 1W1C1M
+            builder: [WORK, CARRY, MOVE] // 1W1C1M
         };
     }
-}
-
-function countMissingStructures(room) {
-    if (!room.memory.plannedStructures) return 0;
-    
-    let missing = 0;
-    for (const planned of room.memory.plannedStructures) {
-        const pos = new RoomPosition(planned.x, planned.y, room.name);
-        const structures = pos.lookFor(LOOK_STRUCTURES);
-        const hasStructure = structures.some(s => s.structureType === planned.type);
-        if (!hasStructure) missing++;
-    }
-    return missing;
 }
 
 // Create construction sites for planned structures that don't exist
@@ -562,10 +411,6 @@ function createMissingConstructionSites(room) {
 }
 
 function runCreep(creep) {
-    if (Game.time % 10 === 0) { // Debug every 10 ticks
-        console.log(`Running creep ${creep.name} with role ${creep.memory.role} at ${creep.pos.x},${creep.pos.y}`);
-    }
-    
     switch (creep.memory.role) {
         case 'harvester':
             runHarvester(creep);
@@ -582,8 +427,6 @@ function runCreep(creep) {
         case 'builder':
             runBuilder(creep);
             break;
-        default:
-            console.log(`Unknown role ${creep.memory.role} for creep ${creep.name}`);
     }
 }
 
