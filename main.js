@@ -302,6 +302,7 @@ function spawnCreeps(spawn, creeps) {
     
     // Normal bootstrap: basic infrastructure phase
     if (!popData.hasInfrastructure || energyCapacity < 550) {
+        console.log(`Bootstrap mode: hasInfrastructure=${popData.hasInfrastructure}, energyCapacity=${energyCapacity}`);
         return normalBootstrap(spawn, creeps, popData);
     }
     
@@ -400,6 +401,9 @@ function emergencyBootstrap(spawn) {
 function normalBootstrap(spawn, creeps, popData) {
     const room = spawn.room;
     const energyCapacity = room.energyCapacityAvailable;
+    
+    // Create construction sites for planned structures if they don't exist
+    createMissingConstructionSites(room);
     
     // Bootstrap population targets (energy-efficient)
     const bootstrapNeeds = {
@@ -521,6 +525,38 @@ function countMissingStructures(room) {
     return missing;
 }
 
+// Create construction sites for planned structures that don't exist
+function createMissingConstructionSites(room) {
+    if (!room.memory.plannedStructures) return;
+    
+    // Limit construction sites to avoid spam
+    const existingConstructionSites = room.find(FIND_CONSTRUCTION_SITES).length;
+    if (existingConstructionSites >= 5) return; // Max 5 construction sites at once
+    
+    let created = 0;
+    for (const planned of room.memory.plannedStructures) {
+        if (created >= 3) break; // Create max 3 per tick to avoid CPU spike
+        
+        const pos = new RoomPosition(planned.x, planned.y, room.name);
+        const structures = pos.lookFor(LOOK_STRUCTURES);
+        const constructionSites = pos.lookFor(LOOK_CONSTRUCTION_SITES);
+        
+        // Check if structure or construction site already exists
+        const hasStructure = structures.some(s => s.structureType === planned.type);
+        const hasConstructionSite = constructionSites.some(c => c.structureType === planned.type);
+        
+        if (!hasStructure && !hasConstructionSite) {
+            const result = room.createConstructionSite(pos.x, pos.y, planned.type);
+            if (result === OK) {
+                console.log(`Created construction site for ${planned.type} at ${pos.x},${pos.y}`);
+                created++;
+            } else if (result !== ERR_FULL && result !== ERR_INVALID_TARGET) {
+                console.log(`Failed to create construction site for ${planned.type}: ${result}`);
+            }
+        }
+    }
+}
+
 function runCreep(creep) {
     switch (creep.memory.role) {
         case 'harvester':
@@ -610,6 +646,25 @@ function runMiner(creep) {
                    structure.pos.getRangeTo(source) <= 2;
         }
     })[0];
+    
+    if (container) {
+        // Move to container position and stay there
+        if (creep.pos.isEqualTo(container.pos)) {
+            // We're on the container, just harvest
+            if (creep.harvest(source) === ERR_NOT_IN_RANGE) {
+                // Container is not adjacent to source, this shouldn't happen
+                console.log(`Container not adjacent to source ${source.id}`);
+            }
+        } else {
+            // Move to container
+            creep.moveTo(container.pos, { visualizePathStyle: { stroke: '#ffaa00' } });
+        }
+    } else {
+        // No container yet, move to source and harvest normally
+        if (creep.harvest(source) === ERR_NOT_IN_RANGE) {
+            creep.moveTo(source, { visualizePathStyle: { stroke: '#ffaa00' } });
+        }
+    }
 }
 
 function runHauler(creep) {
@@ -661,8 +716,16 @@ function runHauler(creep) {
 function runUpgrader(creep) {
     // Always prioritize upgrading the controller
     if (creep.store[RESOURCE_ENERGY] > 0) {
-        if (creep.upgradeController(creep.room.controller) === ERR_NOT_IN_RANGE) {
-            creep.moveTo(creep.room.controller, { visualizePathStyle: { stroke: '#ffffff' } });
+        const controller = creep.room.controller;
+        if (!controller) {
+            console.log(`No controller found in room ${creep.room.name}`);
+            return;
+        }
+        const upgradeResult = creep.upgradeController(controller);
+        if (upgradeResult === ERR_NOT_IN_RANGE) {
+            creep.moveTo(controller.pos, { visualizePathStyle: { stroke: '#ffffff' } });
+        } else if (upgradeResult !== OK) {
+            console.log(`Upgrade error: ${upgradeResult} for creep ${creep.name}`);
         }
     } else {
         // Get energy from spawn/extensions/storage (haulers deliver here)
@@ -698,13 +761,24 @@ function runBuilder(creep) {
         const targets = creep.room.find(FIND_CONSTRUCTION_SITES);
         if (targets.length > 0) {
             const target = creep.pos.findClosestByPath(targets);
-            if (creep.build(target) === ERR_NOT_IN_RANGE) {
-                creep.moveTo(target, { visualizePathStyle: { stroke: '#ffffff' } });
+            if (target) {
+                const buildResult = creep.build(target);
+                if (buildResult === ERR_NOT_IN_RANGE) {
+                    creep.moveTo(target, { visualizePathStyle: { stroke: '#ffffff' } });
+                } else if (buildResult !== OK) {
+                    console.log(`Build error: ${buildResult} for creep ${creep.name}`);
+                }
             }
         } else {
-            // No construction sites, help upgrade
-            if (creep.upgradeController(creep.room.controller) === ERR_NOT_IN_RANGE) {
-                creep.moveTo(creep.room.controller, { visualizePathStyle: { stroke: '#ffffff' } });
+            // No construction sites, help upgrade controller
+            const controller = creep.room.controller;
+            if (controller) {
+                const upgradeResult = creep.upgradeController(controller);
+                if (upgradeResult === ERR_NOT_IN_RANGE) {
+                    creep.moveTo(controller.pos, { visualizePathStyle: { stroke: '#ffffff' } });
+                } else if (upgradeResult !== OK && upgradeResult !== ERR_NOT_ENOUGH_RESOURCES) {
+                    console.log(`Builder upgrade error: ${upgradeResult} for creep ${creep.name}`);
+                }
             }
         }
     } else {
