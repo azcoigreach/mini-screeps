@@ -492,32 +492,6 @@ function runMiner(creep) {
             creep.memory.sourceId = source.id;
         }
     }
-}
-
-function spawnCreeps(spawn, creeps) {
-    // Determine what we need
-    const needs = {
-        harvester: Math.max(2, Math.min(4, Math.floor(creeps.upgrader.length + creeps.builder.length + 1))),
-        upgrader: Math.max(1, Math.min(3, Math.floor(creeps.harvester.length / 2))),
-        builder: Math.max(1, Math.min(2, countMissingStructures(spawn.room) > 0 ? 1 : 0))
-    };
-
-    // Spawn priority: harvester > upgrader > builder
-    if (creeps.harvester.length < needs.harvester && spawn.canCreateCreep([WORK, CARRY, MOVE]) === OK) {
-        const name = 'Harvester' + Game.time;
-        spawn.createCreep([WORK, CARRY, MOVE], name, { role: 'harvester' });
-    } else if (creeps.upgrader.length < needs.upgrader && spawn.canCreateCreep([WORK, CARRY, MOVE]) === OK) {
-        const name = 'Upgrader' + Game.time;
-        spawn.createCreep([WORK, CARRY, MOVE], name, { role: 'upgrader' });
-    } else if (creeps.builder.length < needs.builder && spawn.canCreateCreep([WORK, CARRY, MOVE]) === OK) {
-        const name = 'Builder' + Game.time;
-        spawn.createCreep([WORK, CARRY, MOVE], name, { role: 'builder' });
-    }
-}
-
-function countMissingStructures(room) {
-    if (!room.memory.plannedStructures) return 0;
-    
     if (!source) return;
     
     // Find container near this source
@@ -527,6 +501,10 @@ function countMissingStructures(room) {
                    structure.pos.getRangeTo(source) <= 2;
         }
     })[0];
+}
+
+function countMissingStructures(room) {
+    if (!room.memory.plannedStructures) return 0;
     
     if (container) {
         // Move to container position and stay there
