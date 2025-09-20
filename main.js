@@ -401,8 +401,6 @@ function spawnCreeps(spawn, creeps) {
         builder: bodies.builder.reduce((cost, part) => cost + (part === WORK ? 100 : part === CARRY ? 50 : 50), 0)
     };
     
-    const energyAvailable = room.energyAvailable;
-    
     console.log(`RCL ${rcl}: Energy ${energyAvailable}/${energyCapacity}, Costs: M:${bodyCosts.miner} H:${bodyCosts.hauler} U:${bodyCosts.upgrader} B:${bodyCosts.builder}`);
     
     // Simple spawn priority: miner > hauler > upgrader > builder
