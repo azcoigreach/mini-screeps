@@ -756,9 +756,9 @@ function runUpgrader(creep) {
         // Get energy from spawn/extensions/storage (haulers deliver here)
         const targets = creep.room.find(FIND_STRUCTURES, {
             filter: (structure) => {
-                // Don't take energy from spawn if it has less than 300 energy (reserve for spawning)
+                // Don't take energy from spawn if it has less than 50 energy (early game friendly)
                 if (structure.structureType === STRUCTURE_SPAWN) {
-                    return structure.store[RESOURCE_ENERGY] > 300;
+                    return structure.store[RESOURCE_ENERGY] > 50;
                 }
                 return (structure.structureType === STRUCTURE_EXTENSION ||
                         structure.structureType === STRUCTURE_STORAGE) &&
@@ -773,8 +773,11 @@ function runUpgrader(creep) {
             );
             
             const target = creep.pos.findClosestByPath(priorityTargets.length > 0 ? priorityTargets : targets);
-            if (creep.withdraw(target, RESOURCE_ENERGY) === ERR_NOT_IN_RANGE) {
-                creep.moveTo(target, { visualizePathStyle: { stroke: '#ffaa00' } });
+            if (target) {
+                const withdrawResult = creep.withdraw(target, RESOURCE_ENERGY);
+                if (withdrawResult === ERR_NOT_IN_RANGE) {
+                    creep.moveTo(target, { visualizePathStyle: { stroke: '#ffaa00' } });
+                }
             }
         }
     }
@@ -810,9 +813,9 @@ function runBuilder(creep) {
         // Get energy from spawn/extensions/storage (haulers deliver here)
         const targets = creep.room.find(FIND_STRUCTURES, {
             filter: (structure) => {
-                // Don't take energy from spawn if it has less than 300 energy (reserve for spawning)
+                // Don't take energy from spawn if it has less than 50 energy (early game friendly)
                 if (structure.structureType === STRUCTURE_SPAWN) {
-                    return structure.store[RESOURCE_ENERGY] > 300;
+                    return structure.store[RESOURCE_ENERGY] > 50;
                 }
                 return (structure.structureType === STRUCTURE_EXTENSION ||
                         structure.structureType === STRUCTURE_STORAGE) &&
