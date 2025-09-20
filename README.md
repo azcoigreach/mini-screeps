@@ -1,3 +1,4 @@
+
 # Mini-Screeps Bot - Throughput Optimized
 
 A minimal, self-contained Screeps bot focused on **Pixel earning** with advanced throughput optimization for maximum room efficiency. This bot operates autonomously in a single room with no expansion or remote operations, implementing mathematical throughput calculations for optimal energy flow.
@@ -32,6 +33,7 @@ A minimal, self-contained Screeps bot focused on **Pixel earning** with advanced
 - **Builder Allocation**: 10 energy/tick when construction needed
 - **Upgrader Allocation**: Remaining energy (minimum 4 energy/tick)
 - **Dynamic Balancing**: Adjusts based on room construction needs
+
 
 ## 🏗️ **Architecture**
 
@@ -68,12 +70,14 @@ Spawn/Extensions → Upgraders/Builders → Controller/Construction
   - Optimized CARRY/MOVE ratio for maximum throughput
 - **Count**: 2-3 haulers (based on energy capacity and distance)
 
+
 ### **Upgrader**
 - **Purpose**: Upgrade room controller (prevents downgrading)
 - **Behavior**:
   - Gets energy from spawn/extensions/storage (haulers deliver here)
   - Prioritizes extensions/spawn over storage
   - Dynamic count based on available energy after builder needs
+
 
 ### **Builder**
 - **Purpose**: Construct planned structures
@@ -89,6 +93,7 @@ Spawn/Extensions → Upgraders/Builders → Controller/Construction
 - Base positioned between spawn and controller
 - Structures arranged in a 3-tile radius grid pattern
 - Optimized for shortest travel distances
+
 
 ### **Planned Structures**
 - **Extensions**: 10x (for more creep spawning capacity)
@@ -107,6 +112,7 @@ Spawn/Extensions → Upgraders/Builders → Controller/Construction
 - **Source Containers**: Adjacent to each source for miner deposits
 - **Controller Container**: 2-3 tiles from controller for upgrader access
 - **Road Planning**: Automatic road placement for improved travel efficiency
+
 - **Smart Placement**: Only on plain/swamp terrain, avoiding walls
 
 ## ⚡ **Pixel Earning Strategy**
@@ -138,6 +144,7 @@ Spawn/Extensions → Upgraders/Builders → Controller/Construction
 - No user input needed
 - Self-adapting to room conditions
 - Mathematical optimization based on room layout
+
 
 ## 📊 **Performance Monitoring**
 
