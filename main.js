@@ -502,25 +502,52 @@ function runHauler(creep) {
     
     // If carrying energy, find a sink to deliver to
     if (creep.store[RESOURCE_ENERGY] > 0) {
-        const targets = creep.room.find(FIND_STRUCTURES, {
+        const spawn = creep.room.find(FIND_MY_SPAWNS)[0];
+        
+        // Find all potential targets
+        const spawnTargets = creep.room.find(FIND_STRUCTURES, {
             filter: (structure) => {
                 return (structure.structureType === STRUCTURE_EXTENSION ||
                         structure.structureType === STRUCTURE_SPAWN ||
-                        structure.structureType === STRUCTURE_TOWER ||
-                        structure.structureType === STRUCTURE_STORAGE) &&
+                        structure.structureType === STRUCTURE_TOWER) &&
+                       structure.store.getFreeCapacity(RESOURCE_ENERGY) > 0;
+            }
+        });
+        
+        const containers = creep.room.find(FIND_STRUCTURES, {
+            filter: (structure) => {
+                return structure.structureType === STRUCTURE_CONTAINER &&
+                       structure.store.getFreeCapacity(RESOURCE_ENERGY) > 0;
+            }
+        });
+        
+        const storage = creep.room.find(FIND_STRUCTURES, {
+            filter: (structure) => {
+                return structure.structureType === STRUCTURE_STORAGE &&
                        structure.store.getFreeCapacity(RESOURCE_ENERGY) > 0;
             }
         });
 
-        if (targets.length > 0) {
-            // Prioritize extensions and spawn over storage
-            const priorityTargets = targets.filter(t => 
-                t.structureType === STRUCTURE_EXTENSION || 
-                t.structureType === STRUCTURE_SPAWN || 
-                t.structureType === STRUCTURE_TOWER
-            );
-            
-            const target = creep.pos.findClosestByPath(priorityTargets.length > 0 ? priorityTargets : targets);
+        let target = null;
+        
+        // Priority 1: Spawn/Extensions/Towers
+        if (spawnTargets.length > 0) {
+            target = creep.pos.findClosestByPath(spawnTargets);
+        }
+        // Priority 2: Container near spawn (for upgraders/builders)
+        else if (containers.length > 0 && spawn) {
+            // Find container closest to spawn
+            const spawnContainer = spawn.pos.findClosestByPath(containers);
+            if (spawnContainer) {
+                target = spawnContainer;
+            }
+        }
+        // Priority 3: Storage
+        else if (storage.length > 0) {
+            target = creep.pos.findClosestByPath(storage);
+        }
+        
+        if (target) {
             if (creep.transfer(target, RESOURCE_ENERGY) === ERR_NOT_IN_RANGE) {
                 creep.moveTo(target, { visualizePathStyle: { stroke: '#ffffff' } });
             }
@@ -568,15 +595,8 @@ function runUpgrader(creep) {
         });
         
         if (targets.length > 0) {
-            // Prioritize containers over storage
-            const containers = targets.filter(t => t.structureType === STRUCTURE_CONTAINER);
-            
-            let target;
-            if (containers.length > 0) {
-                target = creep.pos.findClosestByPath(containers);
-            } else {
-                target = creep.pos.findClosestByPath(targets);
-            }
+            // Use closest container/storage with energy for efficiency
+            const target = creep.pos.findClosestByPath(targets);
             
             if (target) {
                 const withdrawResult = creep.withdraw(target, RESOURCE_ENERGY);
@@ -633,15 +653,8 @@ function runBuilder(creep) {
         });
         
         if (targets.length > 0) {
-            // Prioritize containers over storage
-            const containers = targets.filter(t => t.structureType === STRUCTURE_CONTAINER);
-            
-            let target;
-            if (containers.length > 0) {
-                target = creep.pos.findClosestByPath(containers);
-            } else {
-                target = creep.pos.findClosestByPath(targets);
-            }
+            // Use closest container/storage with energy for efficiency
+            const target = creep.pos.findClosestByPath(targets);
             
             if (target) {
                 const withdrawResult = creep.withdraw(target, RESOURCE_ENERGY);
