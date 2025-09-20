@@ -497,8 +497,24 @@ function runMiner(creep) {
         }
     } else {
         // No container yet, move to source and harvest normally
-        if (creep.harvest(source) === ERR_NOT_IN_RANGE) {
-            creep.moveTo(source, { visualizePathStyle: { stroke: '#ffaa00' } });
+        // If creep is full, move away from source to drop energy for haulers
+        if (creep.store.getFreeCapacity() === 0) {
+            // Move one step away from source so haulers can pick up dropped energy
+            const adjacentPos = creep.room.lookForAtArea(LOOK_TERRAIN, 
+                source.pos.y - 1, source.pos.x - 1, 
+                source.pos.y + 1, source.pos.x + 1, true)
+                .filter(pos => pos.terrain !== 'wall' && 
+                       (pos.x !== source.pos.x || pos.y !== source.pos.y))
+                .sort((a, b) => creep.pos.getRangeTo(a.x, a.y) - creep.pos.getRangeTo(b.x, b.y))[0];
+            
+            if (adjacentPos && !creep.pos.isEqualTo(adjacentPos.x, adjacentPos.y)) {
+                creep.moveTo(adjacentPos.x, adjacentPos.y, { visualizePathStyle: { stroke: '#ffaa00' } });
+            }
+        } else {
+            // Harvest normally
+            if (creep.harvest(source) === ERR_NOT_IN_RANGE) {
+                creep.moveTo(source, { visualizePathStyle: { stroke: '#ffaa00' } });
+            }
         }
     }
 }
@@ -566,8 +582,10 @@ function runHauler(creep) {
             }
         }
     } else {
-        // Pick up energy from source containers only (not delivery containers)
+        // Pick up energy from source containers or dropped energy
         const sources = creep.room.find(FIND_SOURCES);
+        
+        // First try to find source containers with energy
         const sourceContainers = creep.room.find(FIND_STRUCTURES, {
             filter: (structure) => {
                 if (structure.structureType !== STRUCTURE_CONTAINER || structure.store[RESOURCE_ENERGY] <= 0) {
@@ -587,6 +605,26 @@ function runHauler(creep) {
             const target = creep.pos.findClosestByPath(sourceContainers);
             if (creep.withdraw(target, RESOURCE_ENERGY) === ERR_NOT_IN_RANGE) {
                 creep.moveTo(target, { visualizePathStyle: { stroke: '#ffaa00' } });
+            }
+        } else {
+            // No source containers yet, look for dropped energy near sources
+            const droppedEnergy = creep.room.find(FIND_DROPPED_RESOURCES, {
+                filter: (resource) => {
+                    return resource.resourceType === RESOURCE_ENERGY && resource.amount >= 50;
+                }
+            });
+            
+            if (droppedEnergy.length > 0) {
+                const target = creep.pos.findClosestByPath(droppedEnergy);
+                if (creep.pickup(target) === ERR_NOT_IN_RANGE) {
+                    creep.moveTo(target, { visualizePathStyle: { stroke: '#ffaa00' } });
+                }
+            } else {
+                // No energy available, move to closest source to wait for miners
+                const target = creep.pos.findClosestByPath(sources);
+                if (target && creep.pos.getRangeTo(target) > 3) {
+                    creep.moveTo(target, { visualizePathStyle: { stroke: '#ffaa00' } });
+                }
             }
         }
     }
