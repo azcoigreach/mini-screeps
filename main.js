@@ -558,25 +558,21 @@ function runUpgrader(creep) {
             console.log(`Upgrade error: ${upgradeResult} for creep ${creep.name}`);
         }
     } else {
-        // Get energy from extensions, containers, or storage (haulers fill these)
+        // Get energy from containers or storage only (spawn/extensions reserved for spawning)
         const targets = creep.room.find(FIND_STRUCTURES, {
             filter: (structure) => {
-                return (structure.structureType === STRUCTURE_EXTENSION ||
-                        structure.structureType === STRUCTURE_CONTAINER ||
+                return (structure.structureType === STRUCTURE_CONTAINER ||
                         structure.structureType === STRUCTURE_STORAGE) &&
                        structure.store[RESOURCE_ENERGY] > 0;
             }
         });
         
         if (targets.length > 0) {
-            // Prioritize extensions, then containers, then storage
-            const extensions = targets.filter(t => t.structureType === STRUCTURE_EXTENSION);
+            // Prioritize containers over storage
             const containers = targets.filter(t => t.structureType === STRUCTURE_CONTAINER);
             
             let target;
-            if (extensions.length > 0) {
-                target = creep.pos.findClosestByPath(extensions);
-            } else if (containers.length > 0) {
+            if (containers.length > 0) {
                 target = creep.pos.findClosestByPath(containers);
             } else {
                 target = creep.pos.findClosestByPath(targets);
@@ -627,25 +623,21 @@ function runBuilder(creep) {
             }
         }
     } else {
-        // Get energy from extensions, containers, or storage (haulers fill these)
+        // Get energy from containers or storage only (spawn/extensions reserved for spawning)
         const targets = creep.room.find(FIND_STRUCTURES, {
             filter: (structure) => {
-                return (structure.structureType === STRUCTURE_EXTENSION ||
-                        structure.structureType === STRUCTURE_CONTAINER ||
+                return (structure.structureType === STRUCTURE_CONTAINER ||
                         structure.structureType === STRUCTURE_STORAGE) &&
                        structure.store[RESOURCE_ENERGY] > 0;
             }
         });
         
         if (targets.length > 0) {
-            // Prioritize extensions, then containers, then storage
-            const extensions = targets.filter(t => t.structureType === STRUCTURE_EXTENSION);
+            // Prioritize containers over storage
             const containers = targets.filter(t => t.structureType === STRUCTURE_CONTAINER);
             
             let target;
-            if (extensions.length > 0) {
-                target = creep.pos.findClosestByPath(extensions);
-            } else if (containers.length > 0) {
+            if (containers.length > 0) {
                 target = creep.pos.findClosestByPath(containers);
             } else {
                 target = creep.pos.findClosestByPath(targets);
