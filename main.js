@@ -24,17 +24,11 @@
  */
 
 module.exports.loop = function () {
-    // Clean up memory with error handling
-    try {
-        for (const name in Memory.creeps) {
-            if (!Game.creeps[name]) {
-                delete Memory.creeps[name];
-            }
+    // Clean up memory
+    for (const name in Memory.creeps) {
+        if (!Game.creeps[name]) {
+            delete Memory.creeps[name];
         }
-    } catch (error) {
-        console.log('Memory cleanup error:', error);
-        // Reset memory if corrupted
-        Memory.creeps = {};
     }
 
     // Get the spawn and room
@@ -42,39 +36,41 @@ module.exports.loop = function () {
     if (!spawn) return;
     
     const room = spawn.room;
-    const controller = room.controller;
     
     // Count creeps by role
     const creeps = {
-        harvester: _.filter(Game.creeps, creep => creep.memory.role === 'harvester'),
         miner: _.filter(Game.creeps, creep => creep.memory.role === 'miner'),
         hauler: _.filter(Game.creeps, creep => creep.memory.role === 'hauler'),
         upgrader: _.filter(Game.creeps, creep => creep.memory.role === 'upgrader'),
         builder: _.filter(Game.creeps, creep => creep.memory.role === 'builder')
     };
 
-    // Plan base layout if not done
+    // Plan base layout once
     if (!room.memory.basePlanned) {
-        try {
-            planBase(room);
-            room.memory.basePlanned = true;
-        } catch (error) {
-            console.log('Base planning error:', error);
-        }
+        planBase(room);
+        room.memory.basePlanned = true;
     }
 
-    // Calculate and cache essential data only once for CPU efficiency
-    if (!room.memory.baseSetup && room.memory.basePlanned) {
-        try {
-            setupBaseData(room);
-            room.memory.baseSetup = true;
-        } catch (error) {
-            console.log('Base setup error:', error);
-        }
+    // Create construction sites
+    if (Game.time % 10 === 0) {
+        createMissingConstructionSites(room);
     }
 
     // Spawn creeps based on needs
     spawnCreeps(spawn, creeps);
+
+    // Debug creep status every 20 ticks
+    if (Game.time % 20 === 0) {
+        console.log(`RCL ${room.controller.level}: Miners: ${creeps.miner.length}, Haulers: ${creeps.hauler.length}, Upgraders: ${creeps.upgrader.length}, Builders: ${creeps.builder.length}`);
+        
+        // Show what each creep is doing
+        for (const name in Game.creeps) {
+            const creep = Game.creeps[name];
+            const energy = creep.store[RESOURCE_ENERGY];
+            const capacity = creep.store.getCapacity();
+            console.log(`${creep.name} (${creep.memory.role}): ${energy}/${capacity} energy at ${creep.pos.x},${creep.pos.y}`);
+        }
+    }
 
     // Run creep logic
     for (const name in Game.creeps) {
@@ -91,184 +87,288 @@ function planBase(room) {
     const spawn = room.find(FIND_MY_SPAWNS)[0];
     const sources = room.find(FIND_SOURCES);
     
-    // Find a good spot for the base (near controller and spawn)
-    const basePos = findBasePosition(controller, spawn);
-    if (!basePos) return;
-
-    // Store base position in room memory
-    room.memory.basePos = { x: basePos.x, y: basePos.y };
-    
-    // Plan base structures around the base
-    const baseStructures = [
-        STRUCTURE_EXTENSION,
-        STRUCTURE_EXTENSION,
-        STRUCTURE_EXTENSION,
-        STRUCTURE_EXTENSION,
-        STRUCTURE_EXTENSION,
-        STRUCTURE_EXTENSION,
-        STRUCTURE_EXTENSION,
-        STRUCTURE_EXTENSION,
-        STRUCTURE_EXTENSION,
-        STRUCTURE_EXTENSION,
-        STRUCTURE_TOWER,
-        STRUCTURE_TOWER,
-        STRUCTURE_LINK,
-        STRUCTURE_STORAGE,
-        STRUCTURE_TERMINAL
-    ];
-
+    // Initialize base planning storage
     room.memory.plannedStructures = [];
+    room.memory.baseCenter = null;
     
-    // Arrange base structures in a grid pattern around the base
-    const radius = 3;
-    let structureIndex = 0;
-    
-    for (let x = -radius; x <= radius; x++) {
-        for (let y = -radius; y <= radius; y++) {
-            if (x === 0 && y === 0) continue; // Skip center (base position)
-            
-            const pos = new RoomPosition(basePos.x + x, basePos.y + y, room.name);
-            if (pos.lookFor(LOOK_TERRAIN)[0] === 'wall') continue;
-            
-            if (structureIndex < baseStructures.length) {
-                room.memory.plannedStructures.push({
-                    x: pos.x,
-                    y: pos.y,
-                    type: baseStructures[structureIndex]
-                });
-                structureIndex++;
-            }
-        }
+    // Find best anchor position using distance transform
+    const anchor = findOptimalAnchor(room, controller, spawn);
+    if (!anchor) {
+        console.log(`Failed to find suitable anchor position in room ${room.name}`);
+        return;
     }
     
-    // Plan containers near sources
+    room.memory.baseCenter = { x: anchor.x, y: anchor.y };
+    console.log(`Base anchor positioned at ${anchor.x},${anchor.y}`);
+    
+    // Place core stamp (spawn area + extensions)
+    placeCoreStamp(room, anchor);
+    
+    // Place source stamps (containers + roads)
     for (const source of sources) {
-        const containerPos = findContainerPosition(source);
-        if (containerPos) {
-            room.memory.plannedStructures.push({
-                x: containerPos.x,
-                y: containerPos.y,
-                type: STRUCTURE_CONTAINER
-            });
+        placeSourceStamp(room, source);
+    }
+    
+    // Place controller stamp (container + roads)
+    placeControllerStamp(room, controller, anchor);
+    
+    // Place extension field stamps around core
+    placeExtensionFields(room, anchor);
+    
+    // Place defense stamps (towers)
+    placeDefenseStamps(room, anchor);
+    
+    // Place economy stamps (storage, terminal, links)
+    placeEconomyStamps(room, anchor);
+    
+    // Connect everything with roads
+    planRoadNetwork(room, anchor, sources, controller);
+    
+    console.log(`Base planned with ${room.memory.plannedStructures.length} structures`);
+}
+
+// Distance transform to find best anchor position
+function findOptimalAnchor(room, controller, spawn) {
+    const terrain = new Room.Terrain(room.name);
+    const distanceMatrix = new PathFinder.CostMatrix();
+    
+    // Calculate distance from walls for each position
+    for (let x = 5; x < 45; x++) {
+        for (let y = 5; y < 45; y++) {
+            if (terrain.get(x, y) === TERRAIN_MASK_WALL) {
+                distanceMatrix.set(x, y, 0);
+                continue;
+            }
+            
+            // Find distance to nearest wall
+            let minDist = 50;
+            for (let dx = -4; dx <= 4; dx++) {
+                for (let dy = -4; dy <= 4; dy++) {
+                    const checkX = x + dx;
+                    const checkY = y + dy;
+                    if (checkX < 0 || checkX > 49 || checkY < 0 || checkY > 49) continue;
+                    if (terrain.get(checkX, checkY) === TERRAIN_MASK_WALL) {
+                        const dist = Math.max(Math.abs(dx), Math.abs(dy));
+                        minDist = Math.min(minDist, dist);
+                    }
+                }
+            }
+            distanceMatrix.set(x, y, minDist);
         }
     }
     
-    // Plan container near controller for upgraders
-    const controllerContainerPos = findControllerContainerPosition(controller);
-    if (controllerContainerPos) {
-        room.memory.plannedStructures.push({
-            x: controllerContainerPos.x,
-            y: controllerContainerPos.y,
-            type: STRUCTURE_CONTAINER
-        });
-    }
+    // Find position with good wall distance and reasonable access to controller/spawn
+    let bestPos = null;
+    let bestScore = 0;
     
-    // Plan roads between sources and base for hauler efficiency
-    planRoads(room);
-}
-
-function findBasePosition(controller, spawn) {
-    // Find position between controller and spawn
-    const path = controller.pos.findPathTo(spawn);
-    if (path.length > 0) {
-        const midIndex = Math.floor(path.length / 2);
-        return path[midIndex];
-    }
-    return controller.pos;
-}
-
-function findContainerPosition(source) {
-    // Find a position adjacent to the source for a container
-    const positions = source.room.lookForAtArea(LOOK_TERRAIN, source.pos.y - 1, source.pos.x - 1, source.pos.y + 1, source.pos.x + 1, true);
-    
-    for (const position of positions) {
-        if (position.terrain === 'plain' || position.terrain === 'swamp') {
-            return { x: position.x, y: position.y };
-        }
-    }
-    return null;
-}
-
-function findControllerContainerPosition(controller) {
-    // Find a position near the controller for a container
-    const positions = controller.room.lookForAtArea(LOOK_TERRAIN, controller.pos.y - 2, controller.pos.x - 2, controller.pos.y + 2, controller.pos.x + 2, true);
-    
-    for (const position of positions) {
-        if (position.terrain === 'plain' || position.terrain === 'swamp') {
-            // Make sure it's not too close to the controller (need 1 space)
-            const distance = controller.pos.getRangeTo(position.x, position.y);
-            if (distance >= 2 && distance <= 3) {
-                return { x: position.x, y: position.y };
+    for (let x = 10; x < 40; x++) {
+        for (let y = 10; y < 40; y++) {
+            const wallDist = distanceMatrix.get(x, y);
+            if (wallDist < 3) continue; // Need space for base
+            
+            const controllerDist = Math.max(Math.abs(x - controller.pos.x), Math.abs(y - controller.pos.y));
+            const spawnDist = Math.max(Math.abs(x - spawn.pos.x), Math.abs(y - spawn.pos.y));
+            
+            // Score: prefer wall distance, penalize excessive distance from controller/spawn
+            const score = wallDist * 2 - Math.min(controllerDist, 15) * 0.5 - Math.min(spawnDist, 10) * 0.3;
+            
+            if (score > bestScore) {
+                bestScore = score;
+                bestPos = { x, y };
             }
         }
     }
-    return null;
+    
+    return bestPos;
 }
 
-function setupBaseData(room) {
-    // Minimal setup - just cache essential room data for CPU efficiency
-    const sources = room.find(FIND_SOURCES);
-    const spawn = room.find(FIND_MY_SPAWNS)[0];
+// Core stamp: Central area with key structures
+function placeCoreStamp(room, anchor) {
+    const coreStamp = [
+        // Format: [dx, dy, structureType]
+        [0, 0, STRUCTURE_STORAGE],     // Center
+        [-1, -1, STRUCTURE_EXTENSION], [0, -1, STRUCTURE_EXTENSION], [1, -1, STRUCTURE_EXTENSION],
+        [-1, 0, STRUCTURE_EXTENSION],                                    [1, 0, STRUCTURE_EXTENSION],
+        [-1, 1, STRUCTURE_EXTENSION],  [0, 1, STRUCTURE_EXTENSION],  [1, 1, STRUCTURE_EXTENSION],
+        // Secondary ring
+        [-2, 0, STRUCTURE_TOWER],      [2, 0, STRUCTURE_TOWER],
+        [0, -2, STRUCTURE_LINK],       [0, 2, STRUCTURE_TERMINAL]
+    ];
     
-    room.memory.roomData = {
-        sourceCount: sources.length,
-        maxEnergyPerTick: sources.length * 10, // 10 energy per source per tick
-        setupComplete: true
+    addStampToPlannedStructures(room, anchor, coreStamp);
+}
+
+// Extension field stamps: Groups of extensions with filler access
+function placeExtensionFields(room, anchor) {
+    const extensionStamp = [
+        // 3x3 extension cluster
+        [-1, -1, STRUCTURE_EXTENSION], [0, -1, STRUCTURE_EXTENSION], [1, -1, STRUCTURE_EXTENSION],
+        [-1, 0, STRUCTURE_EXTENSION],  [0, 0, STRUCTURE_ROAD],       [1, 0, STRUCTURE_EXTENSION],
+        [-1, 1, STRUCTURE_EXTENSION],  [0, 1, STRUCTURE_EXTENSION],  [1, 1, STRUCTURE_EXTENSION]
+    ];
+    
+    // Place multiple extension fields around core
+    const fieldPositions = [
+        { x: anchor.x - 5, y: anchor.y - 5 },
+        { x: anchor.x + 5, y: anchor.y - 5 },
+        { x: anchor.x - 5, y: anchor.y + 5 },
+        { x: anchor.x + 5, y: anchor.y + 5 }
+    ];
+    
+    for (const fieldPos of fieldPositions) {
+        if (isValidStampPosition(room, fieldPos, extensionStamp)) {
+            addStampToPlannedStructures(room, fieldPos, extensionStamp);
+        }
+    }
+}
+
+// Source stamps: Container + access roads
+function placeSourceStamp(room, source) {
+    const sourceStamp = [
+        [0, 0, STRUCTURE_CONTAINER]
+    ];
+    
+    // Find best position adjacent to source
+    const positions = [
+        { x: source.pos.x - 1, y: source.pos.y },
+        { x: source.pos.x + 1, y: source.pos.y },
+        { x: source.pos.x, y: source.pos.y - 1 },
+        { x: source.pos.x, y: source.pos.y + 1 }
+    ];
+    
+    for (const pos of positions) {
+        if (isValidStampPosition(room, pos, sourceStamp)) {
+            addStampToPlannedStructures(room, pos, sourceStamp);
+            break;
+        }
+    }
+}
+
+// Controller stamp: Container for upgraders
+function placeControllerStamp(room, controller, anchor) {
+    const controllerStamp = [
+        [0, 0, STRUCTURE_CONTAINER]
+    ];
+    
+    // Find position 2-3 tiles from controller, towards base
+    const direction = {
+        x: anchor.x > controller.pos.x ? 1 : -1,
+        y: anchor.y > controller.pos.y ? 1 : -1
     };
     
-    console.log(`Base data setup complete: ${sources.length} sources, ${sources.length * 10} max energy/tick`);
+    const containerPos = {
+        x: controller.pos.x + direction.x * 2,
+        y: controller.pos.y + direction.y * 2
+    };
+    
+    if (isValidStampPosition(room, containerPos, controllerStamp)) {
+        addStampToPlannedStructures(room, containerPos, controllerStamp);
+    }
 }
 
-function planRoads(room) {
-    const sources = room.find(FIND_SOURCES);
-    const spawn = room.find(FIND_MY_SPAWNS)[0];
-    const basePos = room.memory.basePos;
+// Defense stamps: Towers with optimal coverage
+function placeDefenseStamps(room, anchor) {
+    const towerStamp = [
+        [0, 0, STRUCTURE_TOWER]
+    ];
     
-    if (!basePos) return;
+    // Place towers at strategic positions around base
+    const towerPositions = [
+        { x: anchor.x - 3, y: anchor.y },
+        { x: anchor.x + 3, y: anchor.y },
+        { x: anchor.x, y: anchor.y - 3 },
+        { x: anchor.x, y: anchor.y + 3 }
+    ];
     
-    const baseRoomPos = new RoomPosition(basePos.x, basePos.y, room.name);
-    
-    // Plan roads from each source to base
-    for (const source of sources) {
-        const path = source.pos.findPathTo(baseRoomPos, {
-            ignoreCreeps: true,
-            ignoreRoads: true
-        });
-        
-        // Add road construction sites along the path (every few steps for efficiency)
-        for (let i = 0; i < path.length; i += 2) { // Every 2 steps to avoid too many roads
-            const pos = path[i];
-            const roomPos = new RoomPosition(pos.x, pos.y, room.name);
-            
-            // Check if there's already a structure planned or built here
-            const existingStructure = roomPos.lookFor(LOOK_STRUCTURES)[0];
-            const plannedStructure = room.memory.plannedStructures.find(p => p.x === pos.x && p.y === pos.y);
-            
-            if (!existingStructure && !plannedStructure) {
-                room.memory.plannedStructures.push({
-                    x: pos.x,
-                    y: pos.y,
-                    type: STRUCTURE_ROAD
-                });
-            }
+    for (const pos of towerPositions) {
+        if (isValidStampPosition(room, pos, towerStamp)) {
+            addStampToPlannedStructures(room, pos, towerStamp);
         }
     }
+}
+
+// Economy stamps: Storage, terminal, links
+function placeEconomyStamps(room, anchor) {
+    const economyStamp = [
+        [0, 0, STRUCTURE_TERMINAL],
+        [2, 0, STRUCTURE_LINK]
+    ];
     
-    // Plan roads from base to controller
-    const controller = room.controller;
-    const controllerPath = baseRoomPos.findPathTo(controller, {
-        ignoreCreeps: true,
-        ignoreRoads: true
-    });
+    const economyPos = { x: anchor.x + 4, y: anchor.y };
+    if (isValidStampPosition(room, economyPos, economyStamp)) {
+        addStampToPlannedStructures(room, economyPos, economyStamp);
+    }
+}
+
+// Helper function: Check if stamp can be placed at position
+function isValidStampPosition(room, anchor, stamp) {
+    const terrain = new Room.Terrain(room.name);
     
-    for (let i = 0; i < controllerPath.length; i += 2) {
-        const pos = controllerPath[i];
-        const roomPos = new RoomPosition(pos.x, pos.y, room.name);
+    for (const [dx, dy, structureType] of stamp) {
+        const x = anchor.x + dx;
+        const y = anchor.y + dy;
         
-        const existingStructure = roomPos.lookFor(LOOK_STRUCTURES)[0];
-        const plannedStructure = room.memory.plannedStructures.find(p => p.x === pos.x && p.y === pos.y);
+        if (x < 2 || x > 47 || y < 2 || y > 47) return false;
+        if (terrain.get(x, y) === TERRAIN_MASK_WALL) return false;
         
-        if (!existingStructure && !plannedStructure) {
+        // Check for existing structures (except roads can overlap)
+        const existing = room.lookForAt(LOOK_STRUCTURES, x, y);
+        if (existing.length > 0 && structureType !== STRUCTURE_ROAD) return false;
+    }
+    
+    return true;
+}
+
+// Helper function: Add stamp structures to planned list
+function addStampToPlannedStructures(room, anchor, stamp) {
+    for (const [dx, dy, structureType] of stamp) {
+        room.memory.plannedStructures.push({
+            x: anchor.x + dx,
+            y: anchor.y + dy,
+            type: structureType
+        });
+    }
+}
+
+// Smart road network planning
+function planRoadNetwork(room, anchor, sources, controller) {
+    // Connect sources to base
+    for (const source of sources) {
+        const path = PathFinder.search(source.pos, { pos: new RoomPosition(anchor.x, anchor.y, room.name), range: 2 }).path;
+        addPathAsRoads(room, path);
+    }
+    
+    // Connect base to controller
+    const controllerPath = PathFinder.search(
+        new RoomPosition(anchor.x, anchor.y, room.name),
+        { pos: controller.pos, range: 3 }
+    ).path;
+    addPathAsRoads(room, controllerPath);
+    
+    // Connect extension fields to base
+    const fieldPositions = [
+        { x: anchor.x - 5, y: anchor.y - 5 },
+        { x: anchor.x + 5, y: anchor.y - 5 },
+        { x: anchor.x - 5, y: anchor.y + 5 },
+        { x: anchor.x + 5, y: anchor.y + 5 }
+    ];
+    
+    for (const fieldPos of fieldPositions) {
+        const startPos = new RoomPosition(fieldPos.x, fieldPos.y, room.name);
+        const path = PathFinder.search(
+            startPos,
+            { pos: new RoomPosition(anchor.x, anchor.y, room.name), range: 2 }
+        ).path;
+        addPathAsRoads(room, path);
+    }
+}
+
+// Helper function: Add path positions as road structures
+function addPathAsRoads(room, path) {
+    for (let i = 1; i < path.length - 1; i += 2) { // Skip every other tile for efficiency
+        const pos = path[i];
+        const existing = room.memory.plannedStructures.find(s => s.x === pos.x && s.y === pos.y);
+        if (!existing) {
             room.memory.plannedStructures.push({
                 x: pos.x,
                 y: pos.y,
@@ -282,250 +382,168 @@ function generateHexId() {
     return Math.floor(Math.random() * 65536).toString(16).padStart(4, '0');
 }
 
-// CPU-optimized population control with energy budgeting and defense allocation
+// Simplified population control based on room controller level
 function spawnCreeps(spawn, creeps) {
     const room = spawn.room;
+    const rcl = room.controller.level;
     const energyCapacity = room.energyCapacityAvailable;
     const energyAvailable = room.energyAvailable;
     
-    // Cache population data to avoid recalculation (CPU optimization)
-    if (!room.memory.populationData || Game.time % 50 === 0) {
-        calculatePopulationData(room);
+    // Hard-coded population targets based on RCL
+    const populationTargets = getPopulationByRCL(rcl);
+    const bodies = getBodiesByEnergyCapacity(energyCapacity);
+    
+    // Calculate body costs for debugging
+    const bodyCosts = {
+        miner: bodies.miner.reduce((cost, part) => cost + (part === WORK ? 100 : part === CARRY ? 50 : 50), 0),
+        hauler: bodies.hauler.reduce((cost, part) => cost + (part === WORK ? 100 : part === CARRY ? 50 : 50), 0),
+        upgrader: bodies.upgrader.reduce((cost, part) => cost + (part === WORK ? 100 : part === CARRY ? 50 : 50), 0),
+        builder: bodies.builder.reduce((cost, part) => cost + (part === WORK ? 100 : part === CARRY ? 50 : 50), 0)
+    };
+    
+    const energyAvailable = room.energyAvailable;
+    
+    console.log(`RCL ${rcl}: Energy ${energyAvailable}/${energyCapacity}, Costs: M:${bodyCosts.miner} H:${bodyCosts.hauler} U:${bodyCosts.upgrader} B:${bodyCosts.builder}`);
+    
+    // Simple spawn priority: miner > hauler > upgrader > builder
+    if (creeps.miner.length < populationTargets.miner) {
+        if (spawn.canCreateCreep(bodies.miner) === OK) {
+            const name = 'mine:' + generateHexId();
+            spawn.createCreep(bodies.miner, name, { role: 'miner' });
+            console.log(`Spawning miner (${creeps.miner.length + 1}/${populationTargets.miner})`);
+            return;
+        } else {
+            console.log(`Cannot spawn miner - need ${bodies.miner.length * 50} energy, have ${spawn.room.energyAvailable}/${energyCapacity}`);
+        }
     }
     const popData = room.memory.populationData;
     
-    // Emergency bootstrap: if we have no creeps at all, spawn minimal recovery force
-    const totalCreeps = Object.keys(Game.creeps).filter(name => Game.creeps[name].room.name === room.name).length;
-    if (totalCreeps === 0) {
-        return emergencyBootstrap(spawn);
-    }
-    
-    // Normal bootstrap: basic infrastructure phase
-    if (!popData.hasInfrastructure || energyCapacity < 550) {
-        return normalBootstrap(spawn, creeps, popData);
-    }
-    
-    // Production phase: optimized population control
-    return productionSpawn(spawn, creeps, popData);
-}
-
-// Calculate all population requirements once per 50 ticks to save CPU
-function calculatePopulationData(room) {
-    const energyCapacity = room.energyCapacityAvailable;
-    const sources = room.find(FIND_SOURCES);
-    const towers = room.find(FIND_MY_STRUCTURES, { filter: s => s.structureType === STRUCTURE_TOWER });
-    const containers = room.find(FIND_STRUCTURES, { filter: s => s.structureType === STRUCTURE_CONTAINER });
-    const sourceContainers = containers.filter(c => sources.some(s => s.pos.getRangeTo(c) <= 2));
-    
-    // Infrastructure status
-    const hasInfrastructure = sourceContainers.length >= 2 && energyCapacity >= 550;
-    
-    // Energy calculations (fixed values for CPU efficiency)
-    const BASE_ENERGY_PER_TICK = 20; // 2 sources * 10 energy/tick
-    const TOWER_ENERGY_PER_TICK = towers.length * 2; // 2 energy/tick per tower for maintenance/defense
-    const REPAIR_ENERGY_PER_TICK = 5; // Fixed allocation for repairs
-    const UPGRADER_MIN_ENERGY = 1; // Minimum to prevent controller downgrade
-    
-    // Calculate optimal populations based on energy capacity and efficiency
-    let minerNeeds, haulerNeeds, upgraderNeeds, builderNeeds;
-    
-    if (energyCapacity >= 1800) { // RCL 6+
-        minerNeeds = 2; // One per source
-        haulerNeeds = 2; // Optimized large haulers
-        upgraderNeeds = 4; // Strong upgrade force
-        builderNeeds = 1; // One efficient builder
-    } else if (energyCapacity >= 1300) { // RCL 5
-        minerNeeds = 2;
-        haulerNeeds = 2;
-        upgraderNeeds = 3;
-        builderNeeds = 1;
-    } else if (energyCapacity >= 800) { // RCL 4
-        minerNeeds = 2;
-        haulerNeeds = 2;
-        upgraderNeeds = 2;
-        builderNeeds = 1;
-    } else { // RCL 3 and below
-        minerNeeds = 2;
-        haulerNeeds = 3; // More small haulers
-        upgraderNeeds = 2;
-        builderNeeds = 1;
-    }
-    
-    // Energy allocation
-    const towerAllocation = TOWER_ENERGY_PER_TICK;
-    const repairAllocation = REPAIR_ENERGY_PER_TICK;
-    const availableForWork = Math.max(0, BASE_ENERGY_PER_TICK - towerAllocation - repairAllocation);
-    
-    // Construction needs check (cached to avoid repeated searches)
-    const missingStructures = countMissingStructures(room);
-    const constructionSites = room.find(FIND_CONSTRUCTION_SITES).length;
-    const hasConstructionWork = missingStructures > 0 || constructionSites > 0;
-    
-    // Builder allocation: 0 if no work, or enough for 1-2 builders
-    const builderAllocation = hasConstructionWork ? Math.min(8, availableForWork * 0.4) : 0;
-    const upgraderAllocation = Math.max(UPGRADER_MIN_ENERGY, availableForWork - builderAllocation);
-    
-    // Adjust builder/upgrader counts based on available energy
-    if (!hasConstructionWork) builderNeeds = 0;
-    if (upgraderAllocation < 4) upgraderNeeds = Math.max(1, upgraderNeeds - 1);
-    
-    room.memory.populationData = {
-        hasInfrastructure,
-        energyCapacity,
-        needs: { miner: minerNeeds, hauler: haulerNeeds, upgrader: upgraderNeeds, builder: builderNeeds },
-        energyBudget: {
-            total: BASE_ENERGY_PER_TICK,
-            towers: towerAllocation,
-            repairs: repairAllocation,
-            builders: builderAllocation,
-            upgraders: upgraderAllocation
-        },
-        hasConstructionWork,
-        missingStructures
-    };
-}
-
-// Emergency recovery: spawn one harvester immediately
-function emergencyBootstrap(spawn) {
-    if (spawn.canCreateCreep([WORK, CARRY, MOVE]) === OK) {
-        const name = 'harv:' + generateHexId();
-        spawn.createCreep([WORK, CARRY, MOVE], name, { role: 'harvester' });
-        console.log('🚨 EMERGENCY: Spawning recovery harvester');
-        return true;
-    }
-    return false;
-}
-
-// Normal bootstrap: build up basic infrastructure
-function normalBootstrap(spawn, creeps, popData) {
-    const room = spawn.room;
-    const energyCapacity = room.energyCapacityAvailable;
-    
-    // Bootstrap population targets (energy-efficient)
-    const bootstrapNeeds = {
-        harvester: Math.min(2, Math.max(1, Math.floor(energyCapacity / 250))),
-        upgrader: 1,
-        builder: popData.hasConstructionWork ? 1 : 0
-    };
-    
-    // Spawn priority: harvester > builder > upgrader
-    if (creeps.harvester.length < bootstrapNeeds.harvester) {
-        if (spawn.canCreateCreep([WORK, CARRY, MOVE]) === OK) {
-            const name = 'harv:' + generateHexId();
-            spawn.createCreep([WORK, CARRY, MOVE], name, { role: 'harvester' });
-            console.log(`Bootstrap: Spawning harvester (${creeps.harvester.length + 1}/${bootstrapNeeds.harvester})`);
-            return true;
+    if (creeps.hauler.length < populationTargets.hauler) {
+        if (spawn.canCreateCreep(bodies.hauler) === OK) {
+            const name = 'haul:' + generateHexId();
+            spawn.createCreep(bodies.hauler, name, { role: 'hauler' });
+            console.log(`Spawning hauler (${creeps.hauler.length + 1}/${populationTargets.hauler})`);
+            return;
         }
-    } else if (creeps.builder.length < bootstrapNeeds.builder) {
-        if (spawn.canCreateCreep([WORK, CARRY, MOVE]) === OK) {
-            const name = 'bldr:' + generateHexId();
-            spawn.createCreep([WORK, CARRY, MOVE], name, { role: 'builder' });
-            console.log('Bootstrap: Spawning builder');
-            return true;
-        }
-    } else if (creeps.upgrader.length < bootstrapNeeds.upgrader) {
-        if (spawn.canCreateCreep([WORK, CARRY, MOVE]) === OK) {
+    }
+    
+    if (creeps.upgrader.length < populationTargets.upgrader) {
+        if (spawn.canCreateCreep(bodies.upgrader) === OK) {
             const name = 'upgr:' + generateHexId();
-            spawn.createCreep([WORK, CARRY, MOVE], name, { role: 'upgrader' });
-            console.log('Bootstrap: Spawning upgrader');
-            return true;
+            spawn.createCreep(bodies.upgrader, name, { role: 'upgrader' });
+            console.log(`Spawning upgrader (${creeps.upgrader.length + 1}/${populationTargets.upgrader})`);
+            return;
         }
     }
-    return false;
+    
+    if (creeps.builder.length < populationTargets.builder) {
+        if (spawn.canCreateCreep(bodies.builder) === OK) {
+            const name = 'bldr:' + generateHexId();
+            spawn.createCreep(bodies.builder, name, { role: 'builder' });
+            console.log(`Spawning builder (${creeps.builder.length + 1}/${populationTargets.builder})`);
+            return;
+        }
+    }
 }
 
-// Production phase: optimized high-efficiency spawning
-function productionSpawn(spawn, creeps, popData) {
-    const needs = popData.needs;
-    const energyCapacity = spawn.room.energyCapacityAvailable;
-    
-    // Pre-calculated body parts for efficiency (no recalculation every tick)
-    const bodies = getOptimalBodies(energyCapacity);
-    
-    // Spawn priority: miner > hauler > upgrader > builder
-    if (creeps.miner.length < needs.miner && spawn.canCreateCreep(bodies.miner) === OK) {
-        const name = 'mine:' + generateHexId();
-        spawn.createCreep(bodies.miner, name, { role: 'miner' });
-        console.log(`Production: Spawning miner (${creeps.miner.length + 1}/${needs.miner})`);
-        return true;
-    } else if (creeps.hauler.length < needs.hauler && spawn.canCreateCreep(bodies.hauler) === OK) {
-        const name = 'haul:' + generateHexId();
-        spawn.createCreep(bodies.hauler, name, { role: 'hauler' });
-        console.log(`Production: Spawning hauler (${creeps.hauler.length + 1}/${needs.hauler})`);
-        return true;
-    } else if (creeps.upgrader.length < needs.upgrader && spawn.canCreateCreep(bodies.upgrader) === OK) {
-        const name = 'upgr:' + generateHexId();
-        spawn.createCreep(bodies.upgrader, name, { role: 'upgrader' });
-        console.log(`Production: Spawning upgrader (${creeps.upgrader.length + 1}/${needs.upgrader})`);
-        return true;
-    } else if (creeps.builder.length < needs.builder && spawn.canCreateCreep(bodies.builder) === OK) {
-        const name = 'bldr:' + generateHexId();
-        spawn.createCreep(bodies.builder, name, { role: 'builder' });
-        console.log(`Production: Spawning builder (${creeps.builder.length + 1}/${needs.builder})`);
-        return true;
+// Hard-coded population targets by RCL
+function getPopulationByRCL(rcl) {
+    switch (rcl) {
+        case 1:
+            return { miner: 1, hauler: 1, upgrader: 1, builder: 2 };
+        case 2:
+            return { miner: 2, hauler: 3, upgrader: 2, builder: 4 };
+        case 3:
+            return { miner: 2, hauler: 4, upgrader: 2, builder: 4 };
+        case 4:
+            return { miner: 2, hauler: 4, upgrader: 3, builder: 3 };
+        case 5:
+            return { miner: 2, hauler: 4, upgrader: 4, builder: 3 };
+        case 6:
+            return { miner: 2, hauler: 4, upgrader: 4, builder: 2 };
+        case 7:
+            return { miner: 2, hauler: 4, upgrader: 5, builder: 2 };
+        case 8:
+            return { miner: 2, hauler: 3, upgrader: 6, builder: 2 };
+        default:
+            return { miner: 2, hauler: 1, upgrader: 1, builder: 1 };
     }
-    
-    // Log status every 100 ticks
-    if (Game.time % 100 === 0) {
-        const budget = popData.energyBudget;
-        console.log(`Population: M:${creeps.miner.length}/${needs.miner} H:${creeps.hauler.length}/${needs.hauler} U:${creeps.upgrader.length}/${needs.upgrader} B:${creeps.builder.length}/${needs.builder}`);
-        console.log(`Energy Budget: ${budget.total}e/t → T:${budget.towers} R:${budget.repairs} B:${budget.builders} U:${budget.upgraders}`);
-    }
-    
-    return false;
 }
 
-// Pre-calculated optimal body parts based on energy capacity
-function getOptimalBodies(energyCapacity) {
+// Hard-coded body configurations by energy capacity
+function getBodiesByEnergyCapacity(energyCapacity) {
     if (energyCapacity >= 1800) { // RCL 6+
         return {
-            miner: [WORK, WORK, WORK, WORK, WORK, MOVE], // 5W1M - max efficiency
+            miner: [WORK, WORK, WORK, WORK, WORK, MOVE], // 5W1M
             hauler: [CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, MOVE, MOVE, MOVE, MOVE], // 8C4M
             upgrader: [WORK, WORK, WORK, CARRY, CARRY, MOVE, MOVE, MOVE], // 3W2C3M
             builder: [WORK, WORK, WORK, CARRY, CARRY, MOVE, MOVE, MOVE] // 3W2C3M
         };
     } else if (energyCapacity >= 1300) { // RCL 5
         return {
-            miner: [WORK, WORK, WORK, WORK, WORK, MOVE],
-            hauler: [CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, MOVE, MOVE, MOVE],
-            upgrader: [WORK, WORK, CARRY, CARRY, MOVE, MOVE],
-            builder: [WORK, WORK, CARRY, CARRY, MOVE, MOVE]
+            miner: [WORK, WORK, WORK, WORK, WORK, MOVE], // 5W1M
+            hauler: [CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, MOVE, MOVE, MOVE], // 6C3M
+            upgrader: [WORK, WORK, CARRY, CARRY, MOVE, MOVE], // 2W2C2M
+            builder: [WORK, WORK, CARRY, CARRY, MOVE, MOVE] // 2W2C2M
         };
     } else if (energyCapacity >= 800) { // RCL 4
         return {
-            miner: [WORK, WORK, WORK, WORK, WORK, MOVE],
-            hauler: [CARRY, CARRY, CARRY, CARRY, MOVE, MOVE],
-            upgrader: [WORK, WORK, CARRY, MOVE],
-            builder: [WORK, WORK, CARRY, MOVE]
+            miner: [WORK, WORK, WORK, WORK, WORK, MOVE], // 5W1M
+            hauler: [CARRY, CARRY, CARRY, CARRY, MOVE, MOVE], // 4C2M
+            upgrader: [WORK, WORK, CARRY, MOVE], // 2W1C1M
+            builder: [WORK, WORK, CARRY, MOVE] // 2W1C1M
         };
-    } else { // RCL 3 and below
+    } else if (energyCapacity >= 550) { // RCL 3
         return {
-            miner: [WORK, WORK, WORK, MOVE],
-            hauler: [CARRY, CARRY, MOVE],
-            upgrader: [WORK, CARRY, MOVE],
-            builder: [WORK, CARRY, MOVE]
+            miner: [WORK, WORK, WORK, WORK, WORK, MOVE], // 5W1M
+            hauler: [CARRY, CARRY, CARRY, CARRY, MOVE], // 4C1M
+            upgrader: [WORK, CARRY, MOVE], // 1W1C1M
+            builder: [WORK, CARRY, MOVE] // 1W1C1M
+        };
+    } else { // RCL 1-2
+        return {
+            miner: [WORK, WORK, MOVE], // 2W1M - only 250 energy
+            hauler: [CARRY, CARRY, MOVE], // 2C1M
+            upgrader: [WORK, CARRY, MOVE], // 1W1C1M
+            builder: [WORK, CARRY, MOVE] // 1W1C1M
         };
     }
 }
 
-function countMissingStructures(room) {
-    if (!room.memory.plannedStructures) return 0;
+// Create construction sites for planned structures that don't exist
+function createMissingConstructionSites(room) {
+    if (!room.memory.plannedStructures) return;
     
-    let missing = 0;
+    // Limit construction sites to avoid spam
+    const existingConstructionSites = room.find(FIND_CONSTRUCTION_SITES).length;
+    if (existingConstructionSites >= 5) return; // Max 5 construction sites at once
+    
+    let created = 0;
     for (const planned of room.memory.plannedStructures) {
+        if (created >= 3) break; // Create max 3 per tick to avoid CPU spike
+        
         const pos = new RoomPosition(planned.x, planned.y, room.name);
         const structures = pos.lookFor(LOOK_STRUCTURES);
+        const constructionSites = pos.lookFor(LOOK_CONSTRUCTION_SITES);
+        
+        // Check if structure or construction site already exists
         const hasStructure = structures.some(s => s.structureType === planned.type);
-        if (!hasStructure) missing++;
+        const hasConstructionSite = constructionSites.some(c => c.structureType === planned.type);
+        
+        if (!hasStructure && !hasConstructionSite) {
+            const result = room.createConstructionSite(pos.x, pos.y, planned.type);
+            if (result === OK) {
+                console.log(`Created construction site for ${planned.type} at ${pos.x},${pos.y}`);
+                created++;
+            } else if (result !== ERR_FULL && result !== ERR_INVALID_TARGET) {
+                console.log(`Failed to create construction site for ${planned.type}: ${result}`);
+            }
+        }
     }
-    return missing;
 }
 
 function runCreep(creep) {
     switch (creep.memory.role) {
-        case 'harvester':
-            runHarvester(creep);
-            break;
         case 'miner':
             runMiner(creep);
             break;
@@ -541,41 +559,9 @@ function runCreep(creep) {
     }
 }
 
-function runHarvester(creep) {
-    // Bootstrap harvester: harvest and deliver energy to spawn/extensions
-    if (creep.store.getFreeCapacity() > 0) {
-        const source = creep.pos.findClosestByPath(FIND_SOURCES);
-        if (creep.harvest(source) === ERR_NOT_IN_RANGE) {
-            creep.moveTo(source, { visualizePathStyle: { stroke: '#ffaa00' } });
-        }
-    } else {
-        // Find spawn/extensions to deliver energy to
-        const targets = creep.room.find(FIND_STRUCTURES, {
-            filter: (structure) => {
-                return (structure.structureType === STRUCTURE_EXTENSION ||
-                        structure.structureType === STRUCTURE_SPAWN ||
-                        structure.structureType === STRUCTURE_TOWER) &&
-                       structure.store.getFreeCapacity(RESOURCE_ENERGY) > 0;
-            }
-        });
-
-        if (targets.length > 0) {
-            const target = creep.pos.findClosestByPath(targets);
-            if (creep.transfer(target, RESOURCE_ENERGY) === ERR_NOT_IN_RANGE) {
-                creep.moveTo(target, { visualizePathStyle: { stroke: '#ffffff' } });
-            }
-        } else {
-            // No space in structures, help upgrade controller
-            if (creep.upgradeController(creep.room.controller) === ERR_NOT_IN_RANGE) {
-                creep.moveTo(creep.room.controller, { visualizePathStyle: { stroke: '#ffffff' } });
-            }
-        }
-    }
-}
-
 function runMiner(creep) {
     // Miners are parked on containers and just harvest continuously
-    // Find assigned source or closest source
+    // Find assigned source or assign a new one
     let source = null;
     if (creep.memory.sourceId) {
         source = Game.getObjectById(creep.memory.sourceId);
@@ -584,23 +570,28 @@ function runMiner(creep) {
     if (!source) {
         // Assign to a source that doesn't have a dedicated miner
         const sources = creep.room.find(FIND_SOURCES);
-        const miners = _.filter(Game.creeps, c => c.memory.role === 'miner');
+        const miners = _.filter(Game.creeps, c => c.memory.role === 'miner' && c.name !== creep.name);
         const assignedSources = miners.map(m => m.memory.sourceId).filter(id => id);
         
+        // Find an unassigned source
         for (const s of sources) {
             if (!assignedSources.includes(s.id)) {
                 source = s;
                 creep.memory.sourceId = s.id;
+                console.log(`${creep.name} assigned to source ${s.id}`);
                 break;
             }
         }
         
-        // If all sources are assigned, use closest
-        if (!source) {
-            source = creep.pos.findClosestByPath(FIND_SOURCES);
+        // If all sources are assigned, this shouldn't happen with proper population control
+        if (!source && sources.length > 0) {
+            // Assign to closest source as fallback, but log warning
+            source = creep.pos.findClosestByPath(sources);
             creep.memory.sourceId = source.id;
+            console.log(`WARNING: ${creep.name} forced to share source ${source.id} - check population targets`);
         }
     }
+  
     if (!source) return;
     
     // Find container near this source
@@ -619,7 +610,8 @@ function countMissingStructures(room) {
         // Move to container position and stay there
         if (creep.pos.isEqualTo(container.pos)) {
             // We're on the container, just harvest
-            if (creep.harvest(source) === ERR_NOT_IN_RANGE) {
+            const harvestResult = creep.harvest(source);
+            if (harvestResult === ERR_NOT_IN_RANGE) {
                 // Container is not adjacent to source, this shouldn't happen
                 console.log(`Container not adjacent to source ${source.id}`);
             }
@@ -629,8 +621,24 @@ function countMissingStructures(room) {
         }
     } else {
         // No container yet, move to source and harvest normally
-        if (creep.harvest(source) === ERR_NOT_IN_RANGE) {
-            creep.moveTo(source, { visualizePathStyle: { stroke: '#ffaa00' } });
+        // If creep is full, move away from source to drop energy for haulers
+        if (creep.store.getFreeCapacity() === 0) {
+            // Move one step away from source so haulers can pick up dropped energy
+            const adjacentPos = creep.room.lookForAtArea(LOOK_TERRAIN, 
+                source.pos.y - 1, source.pos.x - 1, 
+                source.pos.y + 1, source.pos.x + 1, true)
+                .filter(pos => pos.terrain !== 'wall' && 
+                       (pos.x !== source.pos.x || pos.y !== source.pos.y))
+                .sort((a, b) => creep.pos.getRangeTo(a.x, a.y) - creep.pos.getRangeTo(b.x, b.y))[0];
+            
+            if (adjacentPos && !creep.pos.isEqualTo(adjacentPos.x, adjacentPos.y)) {
+                creep.moveTo(adjacentPos.x, adjacentPos.y, { visualizePathStyle: { stroke: '#ffaa00' } });
+            }
+        } else {
+            // Harvest normally
+            if (creep.harvest(source) === ERR_NOT_IN_RANGE) {
+                creep.moveTo(source, { visualizePathStyle: { stroke: '#ffaa00' } });
+            }
         }
     }
 }
@@ -640,76 +648,312 @@ function runHauler(creep) {
     
     // If carrying energy, find a sink to deliver to
     if (creep.store[RESOURCE_ENERGY] > 0) {
-        const targets = creep.room.find(FIND_STRUCTURES, {
+        const spawn = creep.room.find(FIND_MY_SPAWNS)[0];
+        
+        // Find all potential targets
+        const spawnTargets = creep.room.find(FIND_STRUCTURES, {
             filter: (structure) => {
                 return (structure.structureType === STRUCTURE_EXTENSION ||
                         structure.structureType === STRUCTURE_SPAWN ||
-                        structure.structureType === STRUCTURE_TOWER ||
-                        structure.structureType === STRUCTURE_STORAGE) &&
+                        structure.structureType === STRUCTURE_TOWER) &&
+                       structure.store.getFreeCapacity(RESOURCE_ENERGY) > 0;
+            }
+        });
+        
+        // Find source positions to identify source containers
+        const sources = creep.room.find(FIND_SOURCES);
+        
+        const containers = creep.room.find(FIND_STRUCTURES, {
+            filter: (structure) => {
+                if (structure.structureType !== STRUCTURE_CONTAINER || structure.store.getFreeCapacity(RESOURCE_ENERGY) <= 0) {
+                    return false;
+                }
+                // Don't deliver to source containers (they are for pickup only)
+                for (const source of sources) {
+                    if (structure.pos.getRangeTo(source) <= 2) {
+                        return false; // This is a source container, skip it
+                    }
+                }
+                return true; // This is a non-source container (like near spawn)
+            }
+        });
+        
+        const storage = creep.room.find(FIND_STRUCTURES, {
+            filter: (structure) => {
+                return structure.structureType === STRUCTURE_STORAGE &&
                        structure.store.getFreeCapacity(RESOURCE_ENERGY) > 0;
             }
         });
 
-        if (targets.length > 0) {
-            // Prioritize extensions and spawn over storage
-            const priorityTargets = targets.filter(t => 
-                t.structureType === STRUCTURE_EXTENSION || 
-                t.structureType === STRUCTURE_SPAWN || 
-                t.structureType === STRUCTURE_TOWER
-            );
-            
-            const target = creep.pos.findClosestByPath(priorityTargets.length > 0 ? priorityTargets : targets);
+        let target = null;
+        
+        // Priority 1: Spawn/Extensions/Towers
+        if (spawnTargets.length > 0) {
+            target = creep.pos.findClosestByPath(spawnTargets);
+        }
+        // Priority 2: Non-source containers (like near spawn for upgraders/builders)
+        else if (containers.length > 0) {
+            target = creep.pos.findClosestByPath(containers);
+        }
+        // Priority 3: Storage
+        else if (storage.length > 0) {
+            target = creep.pos.findClosestByPath(storage);
+        }
+        
+        if (target) {
             if (creep.transfer(target, RESOURCE_ENERGY) === ERR_NOT_IN_RANGE) {
                 creep.moveTo(target, { visualizePathStyle: { stroke: '#ffffff' } });
             }
         }
     } else {
-        // Not carrying energy, find source containers to pick up from
-        const containers = creep.room.find(FIND_STRUCTURES, {
+        // Pick up energy from source containers or dropped energy
+        const sources = creep.room.find(FIND_SOURCES);
+        
+        // First try to find source containers with energy
+        const sourceContainers = creep.room.find(FIND_STRUCTURES, {
             filter: (structure) => {
-                return structure.structureType === STRUCTURE_CONTAINER &&
-                       structure.store[RESOURCE_ENERGY] > 0;
+                if (structure.structureType !== STRUCTURE_CONTAINER || structure.store[RESOURCE_ENERGY] <= 0) {
+                    return false;
+                }
+                // Only pick up from source containers
+                for (const source of sources) {
+                    if (structure.pos.getRangeTo(source) <= 2) {
+                        return true; // This is a source container
+                    }
+                }
+                return false; // This is not a source container
             }
         });
 
-        if (containers.length > 0) {
-            const target = creep.pos.findClosestByPath(containers);
-            if (creep.withdraw(target, RESOURCE_ENERGY) === ERR_NOT_IN_RANGE) {
-                creep.moveTo(target, { visualizePathStyle: { stroke: '#ffaa00' } });
+        if (sourceContainers.length > 0) {
+            // Distribute haulers evenly across source containers instead of all going to closest
+            let target = null;
+            
+            // Check if hauler has an assigned source
+            if (creep.memory.assignedSource) {
+                const assignedContainer = sourceContainers.find(container => {
+                    const assignedSource = Game.getObjectById(creep.memory.assignedSource);
+                    return assignedSource && container.pos.getRangeTo(assignedSource) <= 2;
+                });
+                
+                if (assignedContainer && assignedContainer.store[RESOURCE_ENERGY] > 0) {
+                    target = assignedContainer;
+                } else {
+                    // Assigned source container is empty, clear assignment to find a new one
+                    delete creep.memory.assignedSource;
+                }
+            }
+            
+            // If no assignment or assigned container is empty, find best source to assign
+            if (!target) {
+                // Count haulers assigned to each source
+                const haulers = _.filter(Game.creeps, c => c.memory.role === 'hauler' && c.name !== creep.name);
+                const sourceAssignments = {};
+                
+                for (const source of sources) {
+                    sourceAssignments[source.id] = haulers.filter(h => h.memory.assignedSource === source.id).length;
+                }
+                
+                // Find source with least haulers assigned and available energy
+                let bestSource = null;
+                let leastAssigned = 999;
+                
+                for (const container of sourceContainers) {
+                    for (const source of sources) {
+                        if (container.pos.getRangeTo(source) <= 2) {
+                            const assignedCount = sourceAssignments[source.id] || 0;
+                            if (assignedCount < leastAssigned) {
+                                leastAssigned = assignedCount;
+                                bestSource = source;
+                                target = container;
+                            }
+                        }
+                    }
+                }
+                
+                if (bestSource) {
+                    creep.memory.assignedSource = bestSource.id;
+                    console.log(`${creep.name} assigned to source ${bestSource.id} (${leastAssigned + 1} haulers on this source)`);
+                }
+            }
+            
+            if (target) {
+                if (creep.withdraw(target, RESOURCE_ENERGY) === ERR_NOT_IN_RANGE) {
+                    creep.moveTo(target, { visualizePathStyle: { stroke: '#ffaa00' } });
+                }
+            }
+        } else {
+            // No source containers yet, look for dropped energy near sources
+            const droppedEnergy = creep.room.find(FIND_DROPPED_RESOURCES, {
+                filter: (resource) => {
+                    return resource.resourceType === RESOURCE_ENERGY && resource.amount >= 50;
+                }
+            });
+            
+            if (droppedEnergy.length > 0) {
+                // Distribute haulers across dropped energy sources too
+                let target = null;
+                
+                if (creep.memory.assignedSource) {
+                    const assignedSource = Game.getObjectById(creep.memory.assignedSource);
+                    if (assignedSource) {
+                        // Look for dropped energy near assigned source
+                        target = droppedEnergy.find(drop => drop.pos.getRangeTo(assignedSource) <= 3);
+                    }
+                }
+                
+                if (!target) {
+                    target = creep.pos.findClosestByPath(droppedEnergy);
+                }
+                
+                if (target && creep.pickup(target) === ERR_NOT_IN_RANGE) {
+                    creep.moveTo(target, { visualizePathStyle: { stroke: '#ffaa00' } });
+                }
+            } else {
+                // No energy available, move to assigned source or closest source to wait
+                let waitTarget = null;
+                
+                if (creep.memory.assignedSource) {
+                    waitTarget = Game.getObjectById(creep.memory.assignedSource);
+                }
+                
+                if (!waitTarget) {
+                    waitTarget = creep.pos.findClosestByPath(sources);
+                }
+                
+                if (waitTarget && creep.pos.getRangeTo(waitTarget) > 3) {
+                    creep.moveTo(waitTarget, { visualizePathStyle: { stroke: '#ffaa00' } });
+                }
             }
         }
     }
 }
 
+// Helper function: Get distributed container for energy pickup
+function getDistributedEnergyContainer(creep, targets) {
+    if (targets.length === 0) return null;
+    
+    const sources = creep.room.find(FIND_SOURCES);
+    const sourceContainers = targets.filter(container => {
+        return sources.some(source => container.pos.getRangeTo(source) <= 2);
+    });
+    const nonSourceContainers = targets.filter(container => {
+        return !sources.some(source => container.pos.getRangeTo(source) <= 2);
+    });
+    
+    // Prefer non-source containers (storage, spawn area containers) first
+    if (nonSourceContainers.length > 0) {
+        return creep.pos.findClosestByPath(nonSourceContainers);
+    }
+    
+    // If only source containers available, use distribution logic
+    if (sourceContainers.length > 0) {
+        // Check if creep has an assigned source
+        if (creep.memory.assignedSource) {
+            const assignedContainer = sourceContainers.find(container => {
+                const assignedSource = Game.getObjectById(creep.memory.assignedSource);
+                return assignedSource && container.pos.getRangeTo(assignedSource) <= 2;
+            });
+            
+            if (assignedContainer && assignedContainer.store[RESOURCE_ENERGY] > 0) {
+                return assignedContainer;
+            } else {
+                // Assigned source container is empty, clear assignment
+                delete creep.memory.assignedSource;
+            }
+        }
+        
+        // Find source with least assigned creeps of this role
+        const sameRoleCreeps = _.filter(Game.creeps, c => c.memory.role === creep.memory.role && c.name !== creep.name);
+        const sourceAssignments = {};
+        
+        for (const source of sources) {
+            sourceAssignments[source.id] = sameRoleCreeps.filter(c => c.memory.assignedSource === source.id).length;
+        }
+        
+        let bestSource = null;
+        let leastAssigned = 999;
+        let bestContainer = null;
+        
+        for (const container of sourceContainers) {
+            for (const source of sources) {
+                if (container.pos.getRangeTo(source) <= 2) {
+                    const assignedCount = sourceAssignments[source.id] || 0;
+                    if (assignedCount < leastAssigned) {
+                        leastAssigned = assignedCount;
+                        bestSource = source;
+                        bestContainer = container;
+                    }
+                }
+            }
+        }
+        
+        if (bestSource) {
+            creep.memory.assignedSource = bestSource.id;
+            console.log(`${creep.name} (${creep.memory.role}) assigned to source ${bestSource.id}`);
+        }
+        
+        return bestContainer;
+    }
+    
+    return null;
+}
+
 function runUpgrader(creep) {
     // Always prioritize upgrading the controller
     if (creep.store[RESOURCE_ENERGY] > 0) {
-        if (creep.upgradeController(creep.room.controller) === ERR_NOT_IN_RANGE) {
-            creep.moveTo(creep.room.controller, { visualizePathStyle: { stroke: '#ffffff' } });
+        const controller = creep.room.controller;
+        if (!controller) {
+            console.log(`No controller found in room ${creep.room.name}`);
+            return;
+        }
+        const upgradeResult = creep.upgradeController(controller);
+        if (upgradeResult === ERR_NOT_IN_RANGE) {
+            creep.moveTo(controller.pos, { visualizePathStyle: { stroke: '#ffffff' } });
+        } else if (upgradeResult !== OK) {
+            console.log(`Upgrade error: ${upgradeResult} for creep ${creep.name}`);
         }
     } else {
-        // Get energy from spawn/extensions/storage (haulers deliver here)
+        // Get energy from containers or storage only (spawn/extensions reserved for spawning)
         const targets = creep.room.find(FIND_STRUCTURES, {
             filter: (structure) => {
-                // Don't take energy from spawn if it has less than 300 energy (reserve for spawning)
-                if (structure.structureType === STRUCTURE_SPAWN) {
-                    return structure.store[RESOURCE_ENERGY] > 300;
-                }
-                return (structure.structureType === STRUCTURE_EXTENSION ||
+                return (structure.structureType === STRUCTURE_CONTAINER ||
                         structure.structureType === STRUCTURE_STORAGE) &&
                        structure.store[RESOURCE_ENERGY] > 0;
             }
         });
-
+        
         if (targets.length > 0) {
-            // Prioritize extensions over storage, but avoid spawn if possible
-            const priorityTargets = targets.filter(t => 
-                t.structureType === STRUCTURE_EXTENSION
-            );
+            // Use distributed container selection for balanced source usage
+            const target = getDistributedEnergyContainer(creep, targets);
             
-            const target = creep.pos.findClosestByPath(priorityTargets.length > 0 ? priorityTargets : targets);
-            if (creep.withdraw(target, RESOURCE_ENERGY) === ERR_NOT_IN_RANGE) {
-                creep.moveTo(target, { visualizePathStyle: { stroke: '#ffaa00' } });
+            if (target) {
+                const withdrawResult = creep.withdraw(target, RESOURCE_ENERGY);
+                if (withdrawResult === ERR_NOT_IN_RANGE) {
+                    creep.moveTo(target, { visualizePathStyle: { stroke: '#ffaa00' } });
+                } else if (withdrawResult !== OK && withdrawResult !== ERR_NOT_ENOUGH_RESOURCES) {
+                    console.log(`Upgrader withdraw error: ${withdrawResult}`);
+                }
+            }
+        } else {
+            // No energy sources available, look for dropped energy as fallback
+            const droppedEnergy = creep.room.find(FIND_DROPPED_RESOURCES, {
+                filter: (resource) => {
+                    return resource.resourceType === RESOURCE_ENERGY && resource.amount >= 50;
+                }
+            });
+            
+            if (droppedEnergy.length > 0) {
+                const target = creep.pos.findClosestByPath(droppedEnergy);
+                if (creep.pickup(target) === ERR_NOT_IN_RANGE) {
+                    creep.moveTo(target, { visualizePathStyle: { stroke: '#ffaa00' } });
+                }
+            } else {
+                // No energy sources available, wait near controller
+                const controller = creep.room.controller;
+                if (controller && creep.pos.getRangeTo(controller) > 3) {
+                    creep.moveTo(controller, { visualizePathStyle: { stroke: '#ffaa00' } });
+                }
             }
         }
     }
@@ -718,41 +962,104 @@ function runUpgrader(creep) {
 function runBuilder(creep) {
     // If creep has energy, build things
     if (creep.store[RESOURCE_ENERGY] > 0) {
-        const targets = creep.room.find(FIND_CONSTRUCTION_SITES);
-        if (targets.length > 0) {
-            const target = creep.pos.findClosestByPath(targets);
-            if (creep.build(target) === ERR_NOT_IN_RANGE) {
+        let target = null;
+        
+        // Check if we have an assigned construction site
+        if (creep.memory.buildTarget) {
+            target = Game.getObjectById(creep.memory.buildTarget);
+            // If the target no longer exists (completed or destroyed), clear assignment
+            if (!target) {
+                delete creep.memory.buildTarget;
+            }
+        }
+        
+        // If no assigned target, find a new one
+        if (!target) {
+            const targets = creep.room.find(FIND_CONSTRUCTION_SITES);
+            if (targets.length > 0) {
+                target = creep.pos.findClosestByPath(targets);
+                if (target) {
+                    creep.memory.buildTarget = target.id;
+                    console.log(`${creep.name} assigned to build ${target.structureType} at ${target.pos.x},${target.pos.y}`);
+                }
+            }
+        }
+        
+        if (target) {
+            const buildResult = creep.build(target);
+            if (buildResult === ERR_NOT_IN_RANGE) {
                 creep.moveTo(target, { visualizePathStyle: { stroke: '#ffffff' } });
+            } else if (buildResult === OK) {
+                // Log progress occasionally
+                if (Game.time % 10 === 0) {
+                    console.log(`${creep.name} building ${target.structureType} - ${target.progress}/${target.progressTotal}`);
+                }
+            } else if (buildResult !== OK) {
+                console.log(`Build error: ${buildResult} for creep ${creep.name}`);
+                // Clear assignment on error to try a different site
+                delete creep.memory.buildTarget;
             }
         } else {
-            // No construction sites, help upgrade
-            if (creep.upgradeController(creep.room.controller) === ERR_NOT_IN_RANGE) {
-                creep.moveTo(creep.room.controller, { visualizePathStyle: { stroke: '#ffffff' } });
+            // No construction sites, help upgrade controller
+            const controller = creep.room.controller;
+            if (controller) {
+                const upgradeResult = creep.upgradeController(controller);
+                if (upgradeResult === ERR_NOT_IN_RANGE) {
+                    creep.moveTo(controller.pos, { visualizePathStyle: { stroke: '#ffffff' } });
+                } else if (upgradeResult !== OK && upgradeResult !== ERR_NOT_ENOUGH_RESOURCES) {
+                    console.log(`Builder upgrade error: ${upgradeResult} for creep ${creep.name}`);
+                }
             }
         }
     } else {
-        // Get energy from spawn/extensions/storage (haulers deliver here)
+        // Get energy from containers or storage only (spawn/extensions reserved for spawning)
         const targets = creep.room.find(FIND_STRUCTURES, {
             filter: (structure) => {
-                // Don't take energy from spawn if it has less than 300 energy (reserve for spawning)
-                if (structure.structureType === STRUCTURE_SPAWN) {
-                    return structure.store[RESOURCE_ENERGY] > 300;
-                }
-                return (structure.structureType === STRUCTURE_EXTENSION ||
+                return (structure.structureType === STRUCTURE_CONTAINER ||
                         structure.structureType === STRUCTURE_STORAGE) &&
                        structure.store[RESOURCE_ENERGY] > 0;
             }
         });
-
+        
         if (targets.length > 0) {
-            // Prioritize extensions over storage, but avoid spawn if possible
-            const priorityTargets = targets.filter(t => 
-                t.structureType === STRUCTURE_EXTENSION
-            );
+            // Use distributed container selection for balanced source usage
+            const target = getDistributedEnergyContainer(creep, targets);
             
-            const target = creep.pos.findClosestByPath(priorityTargets.length > 0 ? priorityTargets : targets);
-            if (creep.withdraw(target, RESOURCE_ENERGY) === ERR_NOT_IN_RANGE) {
-                creep.moveTo(target, { visualizePathStyle: { stroke: '#ffaa00' } });
+            if (target) {
+                const withdrawResult = creep.withdraw(target, RESOURCE_ENERGY);
+                if (withdrawResult === ERR_NOT_IN_RANGE) {
+                    creep.moveTo(target, { visualizePathStyle: { stroke: '#ffaa00' } });
+                } else if (withdrawResult !== OK && withdrawResult !== ERR_NOT_ENOUGH_RESOURCES) {
+                    console.log(`Builder withdraw error: ${withdrawResult}`);
+                }
+            }
+        } else {
+            // No energy sources available, look for dropped energy as fallback
+            const droppedEnergy = creep.room.find(FIND_DROPPED_RESOURCES, {
+                filter: (resource) => {
+                    return resource.resourceType === RESOURCE_ENERGY && resource.amount >= 50;
+                }
+            });
+            
+            if (droppedEnergy.length > 0) {
+                const target = creep.pos.findClosestByPath(droppedEnergy);
+                if (creep.pickup(target) === ERR_NOT_IN_RANGE) {
+                    creep.moveTo(target, { visualizePathStyle: { stroke: '#ffaa00' } });
+                }
+            } else {
+                // No energy sources available, wait near construction sites or controller
+                const constructionSites = creep.room.find(FIND_CONSTRUCTION_SITES);
+                if (constructionSites.length > 0) {
+                    const target = creep.pos.findClosestByPath(constructionSites);
+                    if (target && creep.pos.getRangeTo(target) > 3) {
+                        creep.moveTo(target, { visualizePathStyle: { stroke: '#ffaa00' } });
+                    }
+                } else {
+                    const controller = creep.room.controller;
+                    if (controller && creep.pos.getRangeTo(controller) > 3) {
+                        creep.moveTo(controller, { visualizePathStyle: { stroke: '#ffaa00' } });
+                    }
+                }
             }
         }
     }
