@@ -612,29 +612,6 @@ function runMiner(creep) {
     })[0];
 }
 
-function countMissingStructures(room) {
-    if (!room.memory.plannedStructures) return 0;
-    
-    if (container) {
-        // Move to container position and stay there
-        if (creep.pos.isEqualTo(container.pos)) {
-            // We're on the container, just harvest
-            if (creep.harvest(source) === ERR_NOT_IN_RANGE) {
-                // Container is not adjacent to source, this shouldn't happen
-                console.log(`Container not adjacent to source ${source.id}`);
-            }
-        } else {
-            // Move to container
-            creep.moveTo(container.pos, { visualizePathStyle: { stroke: '#ffaa00' } });
-        }
-    } else {
-        // No container yet, move to source and harvest normally
-        if (creep.harvest(source) === ERR_NOT_IN_RANGE) {
-            creep.moveTo(source, { visualizePathStyle: { stroke: '#ffaa00' } });
-        }
-    }
-}
-
 function runHauler(creep) {
     // Haulers move energy from source containers to spawn/extensions/storage
     
