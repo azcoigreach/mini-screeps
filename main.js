@@ -622,13 +622,38 @@ function runHarvester(creep) {
 
         if (targets.length > 0) {
             const target = creep.pos.findClosestByPath(targets);
-            if (creep.transfer(target, RESOURCE_ENERGY) === ERR_NOT_IN_RANGE) {
-                creep.moveTo(target, { visualizePathStyle: { stroke: '#ffffff' } });
+            if (target) {
+                const transferResult = creep.transfer(target, RESOURCE_ENERGY);
+                if (transferResult === ERR_NOT_IN_RANGE) {
+                    creep.moveTo(target, { visualizePathStyle: { stroke: '#ffffff' } });
+                } else if (transferResult !== OK) {
+                    console.log(`Harvester transfer error: ${transferResult}`);
+                }
             }
         } else {
-            // No space in structures, help upgrade controller
-            if (creep.upgradeController(creep.room.controller) === ERR_NOT_IN_RANGE) {
-                creep.moveTo(creep.room.controller, { visualizePathStyle: { stroke: '#ffffff' } });
+            // No space in structures, find other creeps that need energy
+            const needyCreeps = creep.room.find(FIND_MY_CREEPS, {
+                filter: c => (c.memory.role === 'upgrader' || c.memory.role === 'builder') && 
+                           c.store.getFreeCapacity(RESOURCE_ENERGY) > 0
+            });
+            
+            if (needyCreeps.length > 0) {
+                const target = creep.pos.findClosestByPath(needyCreeps);
+                if (target) {
+                    const transferResult = creep.transfer(target, RESOURCE_ENERGY);
+                    if (transferResult === ERR_NOT_IN_RANGE) {
+                        creep.moveTo(target, { visualizePathStyle: { stroke: '#ffffff' } });
+                    }
+                }
+            } else {
+                // No one needs energy, help upgrade controller
+                const controller = creep.room.controller;
+                if (controller) {
+                    const upgradeResult = creep.upgradeController(controller);
+                    if (upgradeResult === ERR_NOT_IN_RANGE) {
+                        creep.moveTo(controller, { visualizePathStyle: { stroke: '#ffffff' } });
+                    }
+                }
             }
         }
     }
@@ -753,31 +778,58 @@ function runUpgrader(creep) {
             console.log(`Upgrade error: ${upgradeResult} for creep ${creep.name}`);
         }
     } else {
-        // Get energy from spawn/extensions/storage (haulers deliver here)
-        const targets = creep.room.find(FIND_STRUCTURES, {
-            filter: (structure) => {
-                // Don't take energy from spawn if it has less than 50 energy (early game friendly)
-                if (structure.structureType === STRUCTURE_SPAWN) {
-                    return structure.store[RESOURCE_ENERGY] > 50;
-                }
-                return (structure.structureType === STRUCTURE_EXTENSION ||
-                        structure.structureType === STRUCTURE_STORAGE) &&
-                       structure.store[RESOURCE_ENERGY] > 0;
-            }
+        // In bootstrap phase, get energy from harvesters or wait near spawn
+        const harvesters = creep.room.find(FIND_MY_CREEPS, {
+            filter: c => c.memory.role === 'harvester' && c.store[RESOURCE_ENERGY] > 0
         });
-
-        if (targets.length > 0) {
-            // Prioritize extensions over storage, but avoid spawn if possible
-            const priorityTargets = targets.filter(t => 
-                t.structureType === STRUCTURE_EXTENSION
-            );
-            
-            const target = creep.pos.findClosestByPath(priorityTargets.length > 0 ? priorityTargets : targets);
-            if (target) {
+        
+        const extensions = creep.room.find(FIND_MY_STRUCTURES, {
+            filter: s => s.structureType === STRUCTURE_EXTENSION && s.store[RESOURCE_ENERGY] > 0
+        });
+        
+        const containers = creep.room.find(FIND_STRUCTURES, {
+            filter: s => s.structureType === STRUCTURE_CONTAINER && s.store[RESOURCE_ENERGY] > 0
+        });
+        
+        const storage = creep.room.find(FIND_MY_STRUCTURES, {
+            filter: s => s.structureType === STRUCTURE_STORAGE && s.store[RESOURCE_ENERGY] > 0
+        });
+        
+        // Priority: extensions > containers > storage > harvesters
+        let target = null;
+        if (extensions.length > 0) {
+            target = creep.pos.findClosestByPath(extensions);
+        } else if (containers.length > 0) {
+            target = creep.pos.findClosestByPath(containers);
+        } else if (storage.length > 0) {
+            target = creep.pos.findClosestByPath(storage);
+        } else if (harvesters.length > 0) {
+            target = creep.pos.findClosestByPath(harvesters);
+        }
+        
+        if (target) {
+            if (target.structureType) {
+                // It's a structure, withdraw from it
                 const withdrawResult = creep.withdraw(target, RESOURCE_ENERGY);
                 if (withdrawResult === ERR_NOT_IN_RANGE) {
                     creep.moveTo(target, { visualizePathStyle: { stroke: '#ffaa00' } });
+                } else if (withdrawResult !== OK && withdrawResult !== ERR_NOT_ENOUGH_RESOURCES) {
+                    console.log(`Upgrader withdraw error: ${withdrawResult}`);
                 }
+            } else {
+                // It's a harvester creep, get energy from it
+                const transferResult = target.transfer(creep, RESOURCE_ENERGY);
+                if (transferResult === ERR_NOT_IN_RANGE) {
+                    creep.moveTo(target, { visualizePathStyle: { stroke: '#ffaa00' } });
+                } else if (transferResult !== OK && transferResult !== ERR_NOT_ENOUGH_RESOURCES) {
+                    console.log(`Upgrader transfer error: ${transferResult}`);
+                }
+            }
+        } else {
+            // No energy available, move to spawn and wait
+            const spawn = creep.room.find(FIND_MY_SPAWNS)[0];
+            if (spawn && creep.pos.getRangeTo(spawn) > 1) {
+                creep.moveTo(spawn, { visualizePathStyle: { stroke: '#ffaa00' } });
             }
         }
     }
@@ -810,28 +862,58 @@ function runBuilder(creep) {
             }
         }
     } else {
-        // Get energy from spawn/extensions/storage (haulers deliver here)
-        const targets = creep.room.find(FIND_STRUCTURES, {
-            filter: (structure) => {
-                // Don't take energy from spawn if it has less than 50 energy (early game friendly)
-                if (structure.structureType === STRUCTURE_SPAWN) {
-                    return structure.store[RESOURCE_ENERGY] > 50;
-                }
-                return (structure.structureType === STRUCTURE_EXTENSION ||
-                        structure.structureType === STRUCTURE_STORAGE) &&
-                       structure.store[RESOURCE_ENERGY] > 0;
-            }
+        // In bootstrap phase, get energy from harvesters or wait near spawn
+        const harvesters = creep.room.find(FIND_MY_CREEPS, {
+            filter: c => c.memory.role === 'harvester' && c.store[RESOURCE_ENERGY] > 0
         });
-
-        if (targets.length > 0) {
-            // Prioritize extensions over storage, but avoid spawn if possible
-            const priorityTargets = targets.filter(t => 
-                t.structureType === STRUCTURE_EXTENSION
-            );
-            
-            const target = creep.pos.findClosestByPath(priorityTargets.length > 0 ? priorityTargets : targets);
-            if (creep.withdraw(target, RESOURCE_ENERGY) === ERR_NOT_IN_RANGE) {
-                creep.moveTo(target, { visualizePathStyle: { stroke: '#ffaa00' } });
+        
+        const extensions = creep.room.find(FIND_MY_STRUCTURES, {
+            filter: s => s.structureType === STRUCTURE_EXTENSION && s.store[RESOURCE_ENERGY] > 0
+        });
+        
+        const containers = creep.room.find(FIND_STRUCTURES, {
+            filter: s => s.structureType === STRUCTURE_CONTAINER && s.store[RESOURCE_ENERGY] > 0
+        });
+        
+        const storage = creep.room.find(FIND_MY_STRUCTURES, {
+            filter: s => s.structureType === STRUCTURE_STORAGE && s.store[RESOURCE_ENERGY] > 0
+        });
+        
+        // Priority: extensions > containers > storage > harvesters
+        let target = null;
+        if (extensions.length > 0) {
+            target = creep.pos.findClosestByPath(extensions);
+        } else if (containers.length > 0) {
+            target = creep.pos.findClosestByPath(containers);
+        } else if (storage.length > 0) {
+            target = creep.pos.findClosestByPath(storage);
+        } else if (harvesters.length > 0) {
+            target = creep.pos.findClosestByPath(harvesters);
+        }
+        
+        if (target) {
+            if (target.structureType) {
+                // It's a structure, withdraw from it
+                const withdrawResult = creep.withdraw(target, RESOURCE_ENERGY);
+                if (withdrawResult === ERR_NOT_IN_RANGE) {
+                    creep.moveTo(target, { visualizePathStyle: { stroke: '#ffaa00' } });
+                } else if (withdrawResult !== OK && withdrawResult !== ERR_NOT_ENOUGH_RESOURCES) {
+                    console.log(`Builder withdraw error: ${withdrawResult}`);
+                }
+            } else {
+                // It's a harvester creep, get energy from it
+                const transferResult = target.transfer(creep, RESOURCE_ENERGY);
+                if (transferResult === ERR_NOT_IN_RANGE) {
+                    creep.moveTo(target, { visualizePathStyle: { stroke: '#ffaa00' } });
+                } else if (transferResult !== OK && transferResult !== ERR_NOT_ENOUGH_RESOURCES) {
+                    console.log(`Builder transfer error: ${transferResult}`);
+                }
+            }
+        } else {
+            // No energy available, move to spawn and wait
+            const spawn = creep.room.find(FIND_MY_SPAWNS)[0];
+            if (spawn && creep.pos.getRangeTo(spawn) > 1) {
+                creep.moveTo(spawn, { visualizePathStyle: { stroke: '#ffaa00' } });
             }
         }
     }
