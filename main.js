@@ -346,8 +346,11 @@ function placeCoreStamp(room, spawn) {
         [2, 0, STRUCTURE_STORAGE],
         
         // Link to the right of storage  
-        [3, 0, STRUCTURE_LINK],
+        [4, 0, STRUCTURE_LINK],
         
+        // Terminal left of the link
+        [3, 0, STRUCTURE_TERMINAL],
+
         // 2 Towers spread out in the expanded right area
         [4, -1, STRUCTURE_TOWER],
         [4, 1, STRUCTURE_TOWER]
@@ -1631,7 +1634,7 @@ function visualizeBasePlan(room) {
         [STRUCTURE_TOWER]: '#FF8E53',
         [STRUCTURE_ROAD]: '#555555',
         [STRUCTURE_LINK]: '#9B59B6',
-        [STRUCTURE_TERMINAL]: '#E67E22',
+        [STRUCTURE_TERMINAL]: '#2287e6ff',
         [STRUCTURE_RAMPART]: '#2ECC71',
         [STRUCTURE_WALL]: '#95A5A6'
     };
@@ -1710,7 +1713,7 @@ function visualizeBasePlan(room) {
     // Show legend in top-right corner
     const legendX = 45;
     const legendY = 5;
-    visual.rect(legendX - 2, legendY - 1, 4, 8, {
+    visual.rect(legendX - 2, legendY - 1, 4, 9, {
         fill: '#000000',
         opacity: 0.7,
         stroke: '#FFFFFF',
@@ -1728,7 +1731,10 @@ function visualizeBasePlan(room) {
         { color: '#FF8E53', text: 'Towers' },
         { color: '#555555', text: 'Roads' },
         { color: '#FF6B6B', text: 'Storage' },
-        { color: '#2ECC71', text: 'Ramparts' }
+        { color: '#2ECC71', text: 'Ramparts' },
+        { color: '#95A5A6', text: 'Walls' },
+        { color: '#9B59B6', text: 'Links' },
+        { color: '#2287e6ff', text: 'Terminal' }
     ];
     
     legendItems.forEach((item, index) => {
