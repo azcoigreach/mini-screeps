@@ -1029,51 +1029,118 @@ function spawnCreeps(spawn, creeps) {
         builder: bodies.builder.reduce((cost, part) => cost + (part === WORK ? 100 : part === CARRY ? 50 : 50), 0)
     };
     
+    // Helper function to determine if we should wait for more energy or spawn with what we have
+    const shouldWaitForEnergy = (neededEnergy, role) => {
+        // Always wait for optimal energy unless it's an emergency
+        if (energyAvailable >= neededEnergy) return false; // We have enough, spawn now
+        
+        // Emergency situations where we spawn suboptimal creeps:
+        // 1. No creeps of this role exist and it's critical
+        // 2. Energy capacity is very low (early game)
+        const currentCount = creeps[role].length;
+        const isCriticalRole = (role === 'miner' || role === 'hauler');
+        const isEmergency = currentCount === 0 && isCriticalRole;
+        const isEarlyGame = energyCapacity <= 300;
+        
+        return !isEmergency && !isEarlyGame;
+    };
+    
     // Simple spawn priority: miner > hauler > upgrader > builder
     if (creeps.miner.length < populationTargets.miner) {
-        if (energyAvailable >= bodyCosts.miner) {
-            const name = 'mine:' + generateHexId();
-            const result = spawn.spawnCreep(bodies.miner, name, { memory: { role: 'miner' } });
-            if (result === OK) {
-                console.log(`Spawning miner: ${name}`);
+        if (!shouldWaitForEnergy(bodyCosts.miner, 'miner')) {
+            // Use optimal body if we have enough energy, otherwise fallback to affordable body
+            let bodyToUse = bodies.miner;
+            let costToUse = bodyCosts.miner;
+            
+            if (energyAvailable < bodyCosts.miner) {
+                // Fallback to smaller body that we can afford
+                const fallbackBodies = getBodiesByEnergyCapacity(energyAvailable);
+                bodyToUse = fallbackBodies.miner;
+                costToUse = bodyToUse.reduce((cost, part) => cost + (part === WORK ? 100 : part === CARRY ? 50 : 50), 0);
             }
-            return;
+            
+            if (energyAvailable >= costToUse) {
+                const name = 'mine:' + generateHexId();
+                const result = spawn.spawnCreep(bodyToUse, name, { memory: { role: 'miner' } });
+                if (result === OK) {
+                    console.log(`Spawning miner: ${name} (${costToUse}/${bodyCosts.miner} energy)`);
+                }
+                return;
+            }
+        } else {
+            console.log(`⏳ Waiting for ${bodyCosts.miner} energy to spawn optimal miner (have ${energyAvailable})`);
         }
     }
     
     if (creeps.hauler.length < populationTargets.hauler) {
-        if (energyAvailable >= bodyCosts.hauler) {
-            const name = 'haul:' + generateHexId();
-            const result = spawn.spawnCreep(bodies.hauler, name, { memory: { role: 'hauler' } });
-            if (result === OK) {
-                console.log(`Spawning hauler: ${name}`);
-                // Source assignment will happen in the main loop for unassigned creeps
+        if (!shouldWaitForEnergy(bodyCosts.hauler, 'hauler')) {
+            let bodyToUse = bodies.hauler;
+            let costToUse = bodyCosts.hauler;
+            
+            if (energyAvailable < bodyCosts.hauler) {
+                const fallbackBodies = getBodiesByEnergyCapacity(energyAvailable);
+                bodyToUse = fallbackBodies.hauler;
+                costToUse = bodyToUse.reduce((cost, part) => cost + (part === WORK ? 100 : part === CARRY ? 50 : 50), 0);
             }
-            return;
+            
+            if (energyAvailable >= costToUse) {
+                const name = 'haul:' + generateHexId();
+                const result = spawn.spawnCreep(bodyToUse, name, { memory: { role: 'hauler' } });
+                if (result === OK) {
+                    console.log(`Spawning hauler: ${name} (${costToUse}/${bodyCosts.hauler} energy)`);
+                }
+                return;
+            }
+        } else {
+            console.log(`⏳ Waiting for ${bodyCosts.hauler} energy to spawn optimal hauler (have ${energyAvailable})`);
         }
     }
     
     if (creeps.upgrader.length < populationTargets.upgrader) {
-        if (energyAvailable >= bodyCosts.upgrader) {
-            const name = 'upgr:' + generateHexId();
-            const result = spawn.spawnCreep(bodies.upgrader, name, { memory: { role: 'upgrader' } });
-            if (result === OK) {
-                console.log(`Spawning upgrader: ${name}`);
-                // Source assignment will happen in the main loop for unassigned creeps
+        if (!shouldWaitForEnergy(bodyCosts.upgrader, 'upgrader')) {
+            let bodyToUse = bodies.upgrader;
+            let costToUse = bodyCosts.upgrader;
+            
+            if (energyAvailable < bodyCosts.upgrader) {
+                const fallbackBodies = getBodiesByEnergyCapacity(energyAvailable);
+                bodyToUse = fallbackBodies.upgrader;
+                costToUse = bodyToUse.reduce((cost, part) => cost + (part === WORK ? 100 : part === CARRY ? 50 : 50), 0);
             }
-            return;
+            
+            if (energyAvailable >= costToUse) {
+                const name = 'upgr:' + generateHexId();
+                const result = spawn.spawnCreep(bodyToUse, name, { memory: { role: 'upgrader' } });
+                if (result === OK) {
+                    console.log(`Spawning upgrader: ${name} (${costToUse}/${bodyCosts.upgrader} energy)`);
+                }
+                return;
+            }
+        } else {
+            console.log(`⏳ Waiting for ${bodyCosts.upgrader} energy to spawn optimal upgrader (have ${energyAvailable})`);
         }
     }
     
     if (creeps.builder.length < populationTargets.builder) {
-        if (energyAvailable >= bodyCosts.builder) {
-            const name = 'bldr:' + generateHexId();
-            const result = spawn.spawnCreep(bodies.builder, name, { memory: { role: 'builder' } });
-            if (result === OK) {
-                console.log(`Spawning builder: ${name}`);
-                // Source assignment will happen in the main loop for unassigned creeps
+        if (!shouldWaitForEnergy(bodyCosts.builder, 'builder')) {
+            let bodyToUse = bodies.builder;
+            let costToUse = bodyCosts.builder;
+            
+            if (energyAvailable < bodyCosts.builder) {
+                const fallbackBodies = getBodiesByEnergyCapacity(energyAvailable);
+                bodyToUse = fallbackBodies.builder;
+                costToUse = bodyToUse.reduce((cost, part) => cost + (part === WORK ? 100 : part === CARRY ? 50 : 50), 0);
             }
-            return;
+            
+            if (energyAvailable >= costToUse) {
+                const name = 'bldr:' + generateHexId();
+                const result = spawn.spawnCreep(bodyToUse, name, { memory: { role: 'builder' } });
+                if (result === OK) {
+                    console.log(`Spawning builder: ${name} (${costToUse}/${bodyCosts.builder} energy)`);
+                }
+                return;
+            }
+        } else {
+            console.log(`⏳ Waiting for ${bodyCosts.builder} energy to spawn optimal builder (have ${energyAvailable})`);
         }
     }
 }
@@ -1107,30 +1174,30 @@ function getBodiesByEnergyCapacity(energyCapacity) {
     if (energyCapacity >= 1800) { // RCL 6+
         return {
             miner: [WORK, WORK, WORK, WORK, WORK, MOVE], // 5W1M
-            hauler: [CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, MOVE, MOVE, MOVE, MOVE], // 8C4M
-            upgrader: [WORK, WORK, WORK, CARRY, CARRY, MOVE, MOVE, MOVE], // 3W2C3M
-            builder: [WORK, WORK, WORK, CARRY, CARRY, MOVE, MOVE, MOVE] // 3W2C3M
+            hauler: [CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, MOVE, MOVE, MOVE, MOVE, MOVE, MOVE, MOVE, MOVE], // 16C8M
+            upgrader: [WORK, WORK, WORK, WORK, WORK, WORK, WORK, WORK, WORK, WORK, CARRY, CARRY, CARRY, MOVE, MOVE, MOVE], // 10W3C3M
+            builder: [WORK, WORK, WORK, WORK, WORK, WORK, WORK, CARRY, CARRY, CARRY, CARRY, CARRY, MOVE, MOVE, MOVE, MOVE] // 7W5C4M
         };
     } else if (energyCapacity >= 1300) { // RCL 5
         return {
             miner: [WORK, WORK, WORK, WORK, WORK, MOVE], // 5W1M
-            hauler: [CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, MOVE, MOVE, MOVE], // 6C3M
-            upgrader: [WORK, WORK, CARRY, CARRY, MOVE, MOVE], // 2W2C2M
-            builder: [WORK, WORK, CARRY, CARRY, MOVE, MOVE] // 2W2C2M
+            hauler: [CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, MOVE, MOVE, MOVE, MOVE, MOVE, MOVE], // 12C6M
+            upgrader: [WORK, WORK, WORK, WORK, WORK, WORK, WORK, CARRY, CARRY, MOVE, MOVE], // 7W2C2M
+            builder: [WORK, WORK, WORK, WORK, WORK, CARRY, CARRY, CARRY, CARRY, MOVE, MOVE, MOVE] // 5W4C3M
         };
     } else if (energyCapacity >= 800) { // RCL 4
         return {
             miner: [WORK, WORK, WORK, WORK, WORK, MOVE], // 5W1M
-            hauler: [CARRY, CARRY, CARRY, CARRY, MOVE, MOVE], // 4C2M
-            upgrader: [WORK, WORK, CARRY, MOVE], // 2W1C1M
-            builder: [WORK, WORK, CARRY, MOVE] // 2W1C1M
+            hauler: [CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, MOVE, MOVE, MOVE, MOVE], // 8C4M
+            upgrader: [WORK, WORK, WORK, WORK, WORK, CARRY, CARRY, MOVE], // 5W2C1M
+            builder: [WORK, WORK, WORK, WORK, CARRY, CARRY, CARRY, MOVE, MOVE] // 4W3C2M
         };
     } else if (energyCapacity >= 550) { // RCL 3
         return {
             miner: [WORK, WORK, WORK, WORK, WORK, MOVE], // 5W1M
-            hauler: [CARRY, CARRY, CARRY, CARRY, MOVE], // 4C1M
-            upgrader: [WORK, CARRY, MOVE], // 1W1C1M
-            builder: [WORK, CARRY, MOVE] // 1W1C1M
+            hauler: [CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, MOVE, MOVE, MOVE], // 8C3M
+            upgrader: [WORK, WORK, WORK, WORK, CARRY, MOVE], // 4W1C1M
+            builder: [WORK, WORK, WORK, CARRY, CARRY, MOVE, MOVE, MOVE] // 3W2C3M
         };
     } else { // RCL 1-2
         return {
