@@ -1406,11 +1406,50 @@ function createMissingConstructionSites(room) {
     // Filter structures by current RCL to avoid error spam
     const allowedStructures = getAllowedStructuresByRCL(rcl);
     
+    // Sort planned structures by priority, with extensions sorted by distance to spawn
+    const spawn = room.find(FIND_MY_SPAWNS)[0];
+    const sortedPlannedStructures = [...room.memory.plannedStructures].sort((a, b) => {
+        // Priority order for structure types
+        const priorityOrder = [
+            STRUCTURE_SPAWN,
+            STRUCTURE_EXTENSION,
+            STRUCTURE_STORAGE,
+            STRUCTURE_TOWER,
+            STRUCTURE_CONTAINER,
+            STRUCTURE_WALL,
+            STRUCTURE_RAMPART,
+            STRUCTURE_ROAD,
+            STRUCTURE_LINK,
+            STRUCTURE_TERMINAL
+        ];
+        
+        const aPriority = priorityOrder.indexOf(a.type);
+        const bPriority = priorityOrder.indexOf(b.type);
+        
+        // If same structure type and it's an extension, sort by distance to spawn
+        if (a.type === b.type && a.type === STRUCTURE_EXTENSION && spawn) {
+            const distA = spawn.pos.getRangeTo(a.x, a.y);
+            const distB = spawn.pos.getRangeTo(b.x, b.y);
+            return distA - distB;
+        }
+        
+        // Otherwise sort by structure priority
+        if (aPriority !== -1 && bPriority !== -1) {
+            return aPriority - bPriority;
+        }
+        
+        // If one structure is not in priority list, put it at the end
+        if (aPriority === -1 && bPriority !== -1) return 1;
+        if (aPriority !== -1 && bPriority === -1) return -1;
+        
+        return 0; // Same priority
+    });
+    
     let created = 0;
     let rampartCount = 0;
     let totalPlanned = 0;
     
-    for (const planned of room.memory.plannedStructures) {
+    for (const planned of sortedPlannedStructures) {
         totalPlanned++;
         
         // Skip structures not allowed at current RCL
@@ -1433,7 +1472,10 @@ function createMissingConstructionSites(room) {
             const result = room.createConstructionSite(pos.x, pos.y, planned.type);
             if (result === OK) {
                 created++;
-                if (planned.type === STRUCTURE_RAMPART) {
+                if (planned.type === STRUCTURE_EXTENSION && spawn) {
+                    const distance = spawn.pos.getRangeTo(pos.x, pos.y);
+                    console.log(`✅ Created extension construction site at (${pos.x},${pos.y}) - distance ${distance} from spawn`);
+                } else if (planned.type === STRUCTURE_RAMPART) {
                     console.log(`✅ Created rampart construction site at (${pos.x},${pos.y})`);
                 }
             } else {
@@ -2155,9 +2197,21 @@ function getSharedConstructionTarget(room) {
     for (const structureType of priorityOrder) {
         const sitesOfType = constructionSites.filter(site => site.structureType === structureType);
         if (sitesOfType.length > 0) {
-            // For same priority, pick the one closest to spawn
             const spawn = room.find(FIND_MY_SPAWNS)[0];
-            selectedTarget = spawn ? spawn.pos.findClosestByPath(sitesOfType) : sitesOfType[0];
+            
+            if (structureType === STRUCTURE_EXTENSION && spawn) {
+                // For extensions, prioritize by distance to spawn (closest first)
+                sitesOfType.sort((a, b) => {
+                    const distA = spawn.pos.getRangeTo(a.pos);
+                    const distB = spawn.pos.getRangeTo(b.pos);
+                    return distA - distB;
+                });
+                selectedTarget = sitesOfType[0];
+                console.log(`🏗️ Prioritizing extension at (${selectedTarget.pos.x},${selectedTarget.pos.y}) - distance ${spawn.pos.getRangeTo(selectedTarget.pos)} from spawn`);
+            } else {
+                // For other structures, pick the one closest to spawn by path
+                selectedTarget = spawn ? spawn.pos.findClosestByPath(sitesOfType) : sitesOfType[0];
+            }
             break;
         }
     }
