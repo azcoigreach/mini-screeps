@@ -158,11 +158,8 @@ function planBase(room) {
     room.memory.baseCenter = { x: anchor.x, y: anchor.y };
     console.log(`Base anchor positioned at ${anchor.x},${anchor.y}`);
     
-    // Place road perimeter around spawn
-    placeSpawnRoadPerimeter(room, spawn);
-    
     // Place core stamp (spawn area + extensions)
-    placeCoreStamp(room, anchor);
+    placeCoreStamp(room, spawn);
     
     // Place source stamps (containers + roads)
     for (const source of sources) {
@@ -179,7 +176,7 @@ function planBase(room) {
     placeDefenseStampsOptimal(room, spawn, distanceTransform);
     
     // Place economy stamps (storage, terminal, links)
-    placeEconomyStamps(room, anchor);
+    // placeEconomyStamps(room, anchor);
     
     // Connect everything with roads
     planRoadNetwork(room, anchor, sources, controller);
@@ -308,47 +305,52 @@ function findOptimalAnchor(room, controller, spawn) {
     return bestPos;
 }
 
-// Place road perimeter around spawn
-function placeSpawnRoadPerimeter(room, spawn) {
-    const spawnPos = spawn.pos;
-    
-    // 3x3 road perimeter around spawn
-    const roadPositions = [
-        [-1, -1], [0, -1], [1, -1],  // Top row
-        [-1, 0],           [1, 0],   // Middle row (skip spawn center)
-        [-1, 1],  [0, 1],  [1, 1]    // Bottom row
-    ];
-    
-    roadPositions.forEach(([dx, dy]) => {
-        const x = spawnPos.x + dx;
-        const y = spawnPos.y + dy;
-        
-        if (x >= 2 && x <= 47 && y >= 2 && y <= 47) {
-            const terrain = new Room.Terrain(room.name);
-            if (terrain.get(x, y) !== TERRAIN_MASK_WALL) {
-                room.memory.plannedStructures.push({
-                    x: x,
-                    y: y,
-                    type: STRUCTURE_ROAD
-                });
-            }
-        }
-    });
-    
-
-}
-
 // Core stamp: Central area with key structures
-function placeCoreStamp(room, anchor) {
+function placeCoreStamp(room, spawn) {
+    // Place core structures around spawn
+    const anchor = { x: spawn.pos.x, y: spawn.pos.y }; // Anchor to the spawn position
     const coreStamp = [
-        // Format: [dx, dy, structureType]
-        [0, 0, STRUCTURE_STORAGE],     // Center
-        [-1, -1, STRUCTURE_EXTENSION], [0, -1, STRUCTURE_EXTENSION], [1, -1, STRUCTURE_EXTENSION],
-        [-1, 0, STRUCTURE_EXTENSION],                                    [1, 0, STRUCTURE_EXTENSION],
-        [-1, 1, STRUCTURE_EXTENSION],  [0, 1, STRUCTURE_EXTENSION],  [1, 1, STRUCTURE_EXTENSION],
-        // Secondary ring
-        [-2, 0, STRUCTURE_TOWER],      [2, 0, STRUCTURE_TOWER],
-        [0, -2, STRUCTURE_LINK],       [0, 2, STRUCTURE_TERMINAL]
+        // === CENTER: SPAWN (anchor point) ===
+        [0, 0, STRUCTURE_SPAWN],       // Spawn at center (anchor)
+        
+        // === COMPLETE ROAD PERIMETER (10x5 rectangle) ===
+        // Top edge (y = -2) - expanded by 2 tiles
+        [-5, -2, STRUCTURE_ROAD], [-4, -2, STRUCTURE_ROAD], [-3, -2, STRUCTURE_ROAD], [-2, -2, STRUCTURE_ROAD], [-1, -2, STRUCTURE_ROAD], [0, -2, STRUCTURE_ROAD], 
+        [1, -2, STRUCTURE_ROAD], [2, -2, STRUCTURE_ROAD], [3, -2, STRUCTURE_ROAD], [4, -2, STRUCTURE_ROAD],
+        
+        // Second row (y = -1) - roads with structures
+        [-5, -1, STRUCTURE_ROAD], [-4, -1, STRUCTURE_ROAD], [-3, -1, STRUCTURE_ROAD], [-2, -1, STRUCTURE_ROAD], [-1, -1, STRUCTURE_ROAD], [0, -1, STRUCTURE_ROAD], 
+        [1, -1, STRUCTURE_ROAD], [2, -1, STRUCTURE_ROAD], [3, -1, STRUCTURE_ROAD], [4, -1, STRUCTURE_ROAD],
+        
+        // Third row (y = 0) - roads with structures  
+        [-5, 0, STRUCTURE_ROAD], [-4, 0, STRUCTURE_ROAD], [-3, 0, STRUCTURE_ROAD], [-2, 0, STRUCTURE_ROAD], [-1, 0, STRUCTURE_ROAD], [0, 0, STRUCTURE_ROAD], 
+        [1, 0, STRUCTURE_ROAD], [2, 0, STRUCTURE_ROAD], [3, 0, STRUCTURE_ROAD], [4, 0, STRUCTURE_ROAD],
+        
+        // Fourth row (y = 1) - roads with structures
+        [-5, 1, STRUCTURE_ROAD], [-4, 1, STRUCTURE_ROAD], [-3, 1, STRUCTURE_ROAD], [-2, 1, STRUCTURE_ROAD], [-1, 1, STRUCTURE_ROAD], [0, 1, STRUCTURE_ROAD], 
+        [1, 1, STRUCTURE_ROAD], [2, 1, STRUCTURE_ROAD], [3, 1, STRUCTURE_ROAD], [4, 1, STRUCTURE_ROAD],
+        
+        // Bottom edge (y = 2) - expanded by 2 tiles
+        [-5, 2, STRUCTURE_ROAD], [-4, 2, STRUCTURE_ROAD], [-3, 2, STRUCTURE_ROAD], [-2, 2, STRUCTURE_ROAD], [-1, 2, STRUCTURE_ROAD], [0, 2, STRUCTURE_ROAD], 
+        [1, 2, STRUCTURE_ROAD], [2, 2, STRUCTURE_ROAD], [3, 2, STRUCTURE_ROAD], [4, 2, STRUCTURE_ROAD],
+        
+        // === STRUCTURES (placed on top of roads) ===
+        // 5 Extensions in plus pattern - moved left to utilize expanded space
+        [-3, -1, STRUCTURE_EXTENSION], // Top extension
+        [-4, 0, STRUCTURE_EXTENSION],  // Left extension  
+        [-3, 0, STRUCTURE_EXTENSION],  // Center extension
+        [-2, 0, STRUCTURE_EXTENSION],  // Right extension
+        [-3, 1, STRUCTURE_EXTENSION],  // Bottom extension
+        
+        // Storage to the right of spawn
+        [2, 0, STRUCTURE_STORAGE],
+        
+        // Link to the right of storage  
+        [3, 0, STRUCTURE_LINK],
+        
+        // 2 Towers spread out in the expanded right area
+        [4, -1, STRUCTURE_TOWER],
+        [4, 1, STRUCTURE_TOWER]
     ];
     
     addStampToPlannedStructures(room, anchor, coreStamp);
@@ -359,14 +361,19 @@ function placeCoreStamp(room, anchor) {
 // Optimal extension field placement using distance transform
 function placeExtensionFieldsOptimal(room, spawn, distanceTransform) {
     const extensionStamp = [
-        // Plus pattern with road perimeter
+        // Complete road perimeter (5x5 square)
         [-2, -2, STRUCTURE_ROAD], [-1, -2, STRUCTURE_ROAD], [0, -2, STRUCTURE_ROAD], [1, -2, STRUCTURE_ROAD], [2, -2, STRUCTURE_ROAD],
-        [-2, -1, STRUCTURE_ROAD], [-2, 0, STRUCTURE_ROAD], [-2, 1, STRUCTURE_ROAD], [-2, 2, STRUCTURE_ROAD],
-        [2, -1, STRUCTURE_ROAD], [2, 0, STRUCTURE_ROAD], [2, 1, STRUCTURE_ROAD], [2, 2, STRUCTURE_ROAD],
-        [-1, 2, STRUCTURE_ROAD], [0, 2, STRUCTURE_ROAD], [1, 2, STRUCTURE_ROAD], [2, 2, STRUCTURE_ROAD],
+        [-2, -1, STRUCTURE_ROAD], [-1, -1, STRUCTURE_ROAD], [0, -1, STRUCTURE_ROAD], [1, -1, STRUCTURE_ROAD], [2, -1, STRUCTURE_ROAD],
+        [-2, 0, STRUCTURE_ROAD], [-1, 0, STRUCTURE_ROAD], [0, 0, STRUCTURE_ROAD], [1, 0, STRUCTURE_ROAD], [2, 0, STRUCTURE_ROAD],
+        [-2, 1, STRUCTURE_ROAD], [-1, 1, STRUCTURE_ROAD], [0, 1, STRUCTURE_ROAD], [1, 1, STRUCTURE_ROAD], [2, 1, STRUCTURE_ROAD],
+        [-2, 2, STRUCTURE_ROAD], [-1, 2, STRUCTURE_ROAD], [0, 2, STRUCTURE_ROAD], [1, 2, STRUCTURE_ROAD], [2, 2, STRUCTURE_ROAD],
         
-        // Plus pattern extensions
-        [0, -1, STRUCTURE_EXTENSION], [-1, 0, STRUCTURE_EXTENSION], [1, 0, STRUCTURE_EXTENSION], [0, 1, STRUCTURE_EXTENSION]
+        // Plus pattern rotated 45 degrees (diamond formation)
+        [0, -1, STRUCTURE_EXTENSION], // Top
+        [-1, 0, STRUCTURE_EXTENSION], // Left
+        [0, 0, STRUCTURE_EXTENSION],  // Center
+        [1, 0, STRUCTURE_EXTENSION],  // Right
+        [0, 1, STRUCTURE_EXTENSION]   // Bottom
     ];
     
     const spawnPos = spawn.pos;
@@ -399,14 +406,42 @@ function placeExtensionFieldsOptimal(room, spawn, distanceTransform) {
     for (const pos of candidatePositions) {
         if (placed >= maxExtensionFields) break;
         
-        // Check if too close to already placed fields
+        // Check if too close to already placed fields (center to center distance)
         let tooClose = false;
         for (let i = 0; i < placed; i++) {
             const prev = candidatePositions[i];
             const distance = Math.max(Math.abs(pos.x - prev.x), Math.abs(pos.y - prev.y));
-            if (distance < 6) { // Minimum spacing between fields
+            if (distance < 7) { // Minimum spacing between field perimeters
                 tooClose = true;
                 break;
+            }
+        }
+        
+        // Check distance from center of extension stamp to any non-road planned structures
+        if (!tooClose) {
+            const centerX = pos.x;
+            const centerY = pos.y;
+            
+            for (const planned of room.memory.plannedStructures) {
+                if (planned.type !== STRUCTURE_ROAD) {
+                    const distToPlanned = Math.max(Math.abs(centerX - planned.x), Math.abs(centerY - planned.y));
+                    if (distToPlanned < 3) { // Minimum 3 tiles from extension center to any non-road structure
+                        tooClose = true;
+                        break;
+                    }
+                }
+            }
+        }
+        
+        // Additional check: ensure extension centers are at least 3 tiles apart from each other
+        if (!tooClose) {
+            for (let i = 0; i < placed; i++) {
+                const prev = candidatePositions[i];
+                const centerDistance = Math.max(Math.abs(pos.x - prev.x), Math.abs(pos.y - prev.y));
+                if (centerDistance < 3) { // Minimum center-to-center distance
+                    tooClose = true;
+                    break;
+                }
             }
         }
         
@@ -463,34 +498,42 @@ function placeControllerStamp(room, controller, anchor) {
 
 
 
-// Optimal tower placement using distance transform
+// Optimal turret cluster placement using distance transform
 function placeDefenseStampsOptimal(room, spawn, distanceTransform) {
-    const towerClusterStamp = [
-        // Hallway-style tower cluster
-        [-2, -1, STRUCTURE_ROAD], [-1, -1, STRUCTURE_ROAD], [0, -1, STRUCTURE_ROAD], [1, -1, STRUCTURE_ROAD], [2, -1, STRUCTURE_ROAD],
-        [-2, 0, STRUCTURE_ROAD], [-1, 0, STRUCTURE_ROAD], [0, 0, STRUCTURE_ROAD], [1, 0, STRUCTURE_ROAD], [2, 0, STRUCTURE_ROAD],
-        [-2, 1, STRUCTURE_ROAD], [-1, 1, STRUCTURE_ROAD], [0, 1, STRUCTURE_ROAD], [1, 1, STRUCTURE_ROAD], [2, 1, STRUCTURE_ROAD],
-        [-1, -2, STRUCTURE_TOWER], [0, -2, STRUCTURE_TOWER], [1, -2, STRUCTURE_TOWER],
-        [-1, 2, STRUCTURE_TOWER], [0, 2, STRUCTURE_TOWER], [1, 2, STRUCTURE_TOWER]
+    // Define a condensed 2x2 turret cluster with a surrounding road border
+    const turretClusterStamp = [
+        // Border roads (top row)
+        [-1, -1, STRUCTURE_ROAD], [0, -1, STRUCTURE_ROAD], [1, -1, STRUCTURE_ROAD], [2, -1, STRUCTURE_ROAD],
+        // Border roads (middle rows sides)
+        [-1, 0, STRUCTURE_ROAD], [2, 0, STRUCTURE_ROAD],
+        [-1, 1, STRUCTURE_ROAD], [2, 1, STRUCTURE_ROAD],
+        // Border roads (bottom row)
+        [-1, 2, STRUCTURE_ROAD], [0, 2, STRUCTURE_ROAD], [1, 2, STRUCTURE_ROAD], [2, 2, STRUCTURE_ROAD],
+        // 4 Turrets in a condensed 2x2 square
+        [0, 0, STRUCTURE_TOWER], [1, 0, STRUCTURE_TOWER],
+        [0, 1, STRUCTURE_TOWER], [1, 1, STRUCTURE_TOWER]
     ];
     
     const spawnPos = spawn.pos;
     let bestPosition = null;
     let bestScore = 0;
     
-    // Find optimal position for tower cluster
+    // Look for an optimal position for the turret cluster
     for (let x = Math.max(5, spawnPos.x - 10); x <= Math.min(44, spawnPos.x + 10); x++) {
         for (let y = Math.max(5, spawnPos.y - 10); y <= Math.min(44, spawnPos.y + 10); y++) {
             const distanceFromSpawn = Math.max(Math.abs(x - spawnPos.x), Math.abs(y - spawnPos.y));
             const wallDistance = distanceTransform.get(x, y);
             
-            // Good positions: medium distance from spawn, far from walls
+            // Favor positions with a medium distance from spawn and far from walls
             if (distanceFromSpawn >= 4 && distanceFromSpawn <= 8 && wallDistance >= 3) {
-                if (isValidStampPosition(room, { x, y }, towerClusterStamp)) {
-                    const score = wallDistance * 1.5 - distanceFromSpawn * 0.3;
-                    if (score > bestScore) {
-                        bestScore = score;
-                        bestPosition = { x, y };
+                if (isValidStampPosition(room, { x, y }, turretClusterStamp)) {
+                    // Additional check: ensure turrets are at least 1 tile away from non-road buildings
+                    if (isTurretClusterValidDistance(room, { x, y }, turretClusterStamp)) {
+                        const score = wallDistance * 1.5 - distanceFromSpawn * 0.3;
+                        if (score > bestScore) {
+                            bestScore = score;
+                            bestPosition = { x, y };
+                        }
                     }
                 }
             }
@@ -498,8 +541,59 @@ function placeDefenseStampsOptimal(room, spawn, distanceTransform) {
     }
     
     if (bestPosition) {
-        addStampToPlannedStructures(room, bestPosition, towerClusterStamp);
+        addStampToPlannedStructures(room, bestPosition, turretClusterStamp);
     }
+}
+
+// Helper function: Check if turret cluster maintains minimum distance from non-road buildings
+function isTurretClusterValidDistance(room, anchor, stamp) {
+    // Extract turret positions from the stamp
+    const turretPositions = [];
+    for (const [dx, dy, structureType] of stamp) {
+        if (structureType === STRUCTURE_TOWER) {
+            turretPositions.push({
+                x: anchor.x + dx,
+                y: anchor.y + dy
+            });
+        }
+    }
+    
+    // Check distance from each turret to all existing non-road planned structures
+    for (const turretPos of turretPositions) {
+        for (const planned of room.memory.plannedStructures) {
+            if (planned.type !== STRUCTURE_ROAD) {
+                const distance = Math.max(Math.abs(turretPos.x - planned.x), Math.abs(turretPos.y - planned.y));
+                if (distance < 2) { // Minimum 2 tiles separation for creep pathfinding
+                    return false;
+                }
+            }
+        }
+        
+        // Check distance from existing built non-road structures in a 5x5 area around each turret
+        for (let dx = -2; dx <= 2; dx++) {
+            for (let dy = -2; dy <= 2; dy++) {
+                if (dx === 0 && dy === 0) continue; // Skip the turret position itself
+                
+                const checkX = turretPos.x + dx;
+                const checkY = turretPos.y + dy;
+                
+                if (checkX >= 0 && checkX <= 49 && checkY >= 0 && checkY <= 49) {
+                    const structuresAt = room.lookForAt(LOOK_STRUCTURES, checkX, checkY);
+                    for (const structure of structuresAt) {
+                        if (structure.structureType !== STRUCTURE_ROAD) {
+                            // Calculate distance from turret to this structure
+                            const structDistance = Math.max(Math.abs(dx), Math.abs(dy));
+                            if (structDistance < 2) { // Minimum 2 tiles for creep movement
+                                return false;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    return true; // All turrets maintain proper distance for creep pathfinding
 }
 
 // Wall and rampart gate placement - block room entrances with walls and rampart gates
@@ -838,9 +932,27 @@ function isValidStampPosition(room, anchor, stamp) {
         if (x < 2 || x > 47 || y < 2 || y > 47) return false;
         if (terrain.get(x, y) === TERRAIN_MASK_WALL) return false;
         
-        // Check for existing structures (except roads can overlap)
+        // Check for existing planned structures - only roads can overlap
+        const plannedAtPos = (room.memory.plannedStructures && room.memory.plannedStructures.filter(s => s.x === x && s.y === y)) || [];
+        if (plannedAtPos.length > 0) {
+            // If we're placing a road, it can overlap anything
+            if (structureType === STRUCTURE_ROAD) continue;
+            // If existing structure is a road, we can place over it
+            if (plannedAtPos.every(s => s.type === STRUCTURE_ROAD)) continue;
+            // Otherwise, no overlap allowed
+            return false;
+        }
+        
+        // Check for existing built structures - only roads can overlap
         const existing = room.lookForAt(LOOK_STRUCTURES, x, y);
-        if (existing.length > 0 && structureType !== STRUCTURE_ROAD) return false;
+        if (existing.length > 0) {
+            // If we're placing a road, it can overlap anything
+            if (structureType === STRUCTURE_ROAD) continue;
+            // If existing structure is a road, we can place over it
+            if (existing.every(s => s.structureType === STRUCTURE_ROAD)) continue;
+            // Otherwise, no overlap allowed
+            return false;
+        }
     }
     
     return true;
@@ -848,12 +960,63 @@ function isValidStampPosition(room, anchor, stamp) {
 
 // Helper function: Add stamp structures to planned list
 function addStampToPlannedStructures(room, anchor, stamp) {
+    let structuresAdded = 0;
+    let duplicatesSkipped = 0;
+    let conflictsAvoided = 0;
+    
     for (const [dx, dy, structureType] of stamp) {
+        const x = anchor.x + dx;
+        const y = anchor.y + dy;
+        
+        // Check if there's already a structure planned at this position
+        const existingPlanned = room.memory.plannedStructures.filter(s => s.x === x && s.y === y);
+        
+        // Check if there's already a built structure at this position
+        const existingBuilt = room.lookForAt(LOOK_STRUCTURES, x, y);
+        
+        // Skip if same structure type already exists (planned or built)
+        const hasSameTypePlanned = existingPlanned.some(s => s.type === structureType);
+        const hasSameTypeBuilt = existingBuilt.some(s => s.structureType === structureType);
+        
+        if (hasSameTypePlanned || hasSameTypeBuilt) {
+            duplicatesSkipped++;
+            continue; // Same structure already exists, don't add duplicate
+        }
+        
+        // For roads: skip if non-road structure exists (planned or built)
+        if (structureType === STRUCTURE_ROAD) {
+            const hasNonRoadPlanned = existingPlanned.some(s => s.type !== STRUCTURE_ROAD);
+            const hasNonRoadBuilt = existingBuilt.some(s => s.structureType !== STRUCTURE_ROAD);
+            
+            if (hasNonRoadPlanned || hasNonRoadBuilt) {
+                conflictsAvoided++;
+                continue; // Don't place road under other buildings
+            }
+        }
+        
+        // For non-roads: skip if any other structure exists (planned or built), except roads can be overwritten
+        if (structureType !== STRUCTURE_ROAD) {
+            const hasConflictingPlanned = existingPlanned.some(s => s.type !== STRUCTURE_ROAD);
+            const hasConflictingBuilt = existingBuilt.some(s => s.structureType !== STRUCTURE_ROAD);
+            
+            if (hasConflictingPlanned || hasConflictingBuilt) {
+                conflictsAvoided++;
+                continue; // Don't place non-road over other non-road structures
+            }
+        }
+        
+        // Safe to place structure - no conflicts
         room.memory.plannedStructures.push({
-            x: anchor.x + dx,
-            y: anchor.y + dy,
+            x: x,
+            y: y,
             type: structureType
         });
+        structuresAdded++;
+    }
+    
+    // Log stamp placement summary if there were any conflicts
+    if (duplicatesSkipped > 0 || conflictsAvoided > 0) {
+        console.log(`📐 Stamp: ${structuresAdded} structures added, ${duplicatesSkipped} duplicates skipped, ${conflictsAvoided} conflicts avoided`);
     }
 }
 
@@ -954,29 +1117,49 @@ function planRoadNetwork(room, anchor, sources, controller) {
 // Enhanced helper function: Add path positions as road structures with logging
 function addPathAsRoads(room, path, routeName = 'Unknown Route') {
     let roadsAdded = 0;
+    let roadsSkipped = 0;
+    let structureConflicts = 0;
+    
     // Place roads on every tile of the path except start and end positions for continuous connections
     for (let i = 1; i < path.length - 1; i++) {
         const pos = path[i];
         
         // Check if there's already a structure planned at this position
-        const existing = room.memory.plannedStructures.find(s => s.x === pos.x && s.y === pos.y);
+        const existingPlanned = room.memory.plannedStructures.filter(s => s.x === pos.x && s.y === pos.y);
         
-        if (!existing) {
-            // No structure planned here, safe to place road
-            room.memory.plannedStructures.push({
-                x: pos.x,
-                y: pos.y,
-                type: STRUCTURE_ROAD
-            });
-            roadsAdded++;
-        } else if (existing.type === STRUCTURE_ROAD) {
-            // Road already planned here, no need to add another
-            continue;
-        } else {
-            // Another type of structure is planned here (spawn, extension, etc.)
-            // Don't place a road under it
-            continue;
+        // Check if there's already a built structure at this position
+        const existingBuilt = room.lookForAt(LOOK_STRUCTURES, pos.x, pos.y);
+        
+        // Skip if road already exists (planned or built)
+        const hasRoadPlanned = existingPlanned.some(s => s.type === STRUCTURE_ROAD);
+        const hasRoadBuilt = existingBuilt.some(s => s.structureType === STRUCTURE_ROAD);
+        
+        if (hasRoadPlanned || hasRoadBuilt) {
+            roadsSkipped++;
+            continue; // Road already exists, don't add duplicate
         }
+        
+        // Skip if non-road structure exists (planned or built)
+        const hasNonRoadPlanned = existingPlanned.some(s => s.type !== STRUCTURE_ROAD);
+        const hasNonRoadBuilt = existingBuilt.some(s => s.structureType !== STRUCTURE_ROAD);
+        
+        if (hasNonRoadPlanned || hasNonRoadBuilt) {
+            structureConflicts++;
+            continue; // Don't place road under other buildings
+        }
+        
+        // Safe to place road - no conflicts
+        room.memory.plannedStructures.push({
+            x: pos.x,
+            y: pos.y,
+            type: STRUCTURE_ROAD
+        });
+        roadsAdded++;
+    }
+    
+    // Log road placement summary
+    if (roadsAdded > 0 || roadsSkipped > 0 || structureConflicts > 0) {
+        console.log(`🛣️ ${routeName}: ${roadsAdded} roads added, ${roadsSkipped} duplicates skipped, ${structureConflicts} structure conflicts avoided`);
     }
 }
 
@@ -1529,8 +1712,13 @@ function runMiner(creep) {
         if (!source && sources.length > 0) {
             // Assign to closest source as fallback, but log warning
             source = creep.pos.findClosestByPath(sources);
-            creep.memory.sourceId = source.id;
-            console.log(`WARNING: ${creep.name} forced to share source ${source.id} - check population targets`);
+            if (source) {
+                creep.memory.sourceId = source.id;
+                console.log(`WARNING: ${creep.name} forced to share source ${source.id} - check population targets`);
+            } else {
+                console.log(`ERROR: ${creep.name} cannot find any accessible source`);
+                return;
+            }
         }
     }
   
