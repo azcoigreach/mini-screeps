@@ -395,33 +395,45 @@ function spawnCreeps(spawn, creeps) {
     
     // Simple spawn priority: miner > hauler > upgrader > builder
     if (creeps.miner.length < populationTargets.miner) {
-        if (spawn.canCreateCreep(bodies.miner) === OK) {
+        if (energyAvailable >= bodyCosts.miner) {
             const name = 'mine:' + generateHexId();
-            spawn.createCreep(bodies.miner, name, { role: 'miner' });
+            const result = spawn.spawnCreep(bodies.miner, name, { memory: { role: 'miner' } });
+            if (result === OK) {
+                console.log(`Spawning miner: ${name}`);
+            }
             return;
         }
     }
     
     if (creeps.hauler.length < populationTargets.hauler) {
-        if (spawn.canCreateCreep(bodies.hauler) === OK) {
+        if (energyAvailable >= bodyCosts.hauler) {
             const name = 'haul:' + generateHexId();
-            spawn.createCreep(bodies.hauler, name, { role: 'hauler' });
+            const result = spawn.spawnCreep(bodies.hauler, name, { memory: { role: 'hauler' } });
+            if (result === OK) {
+                console.log(`Spawning hauler: ${name}`);
+            }
             return;
         }
     }
     
     if (creeps.upgrader.length < populationTargets.upgrader) {
-        if (spawn.canCreateCreep(bodies.upgrader) === OK) {
+        if (energyAvailable >= bodyCosts.upgrader) {
             const name = 'upgr:' + generateHexId();
-            spawn.createCreep(bodies.upgrader, name, { role: 'upgrader' });
+            const result = spawn.spawnCreep(bodies.upgrader, name, { memory: { role: 'upgrader' } });
+            if (result === OK) {
+                console.log(`Spawning upgrader: ${name}`);
+            }
             return;
         }
     }
     
     if (creeps.builder.length < populationTargets.builder) {
-        if (spawn.canCreateCreep(bodies.builder) === OK) {
+        if (energyAvailable >= bodyCosts.builder) {
             const name = 'bldr:' + generateHexId();
-            spawn.createCreep(bodies.builder, name, { role: 'builder' });
+            const result = spawn.spawnCreep(bodies.builder, name, { memory: { role: 'builder' } });
+            if (result === OK) {
+                console.log(`Spawning builder: ${name}`);
+            }
             return;
         }
     }
