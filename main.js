@@ -24,7 +24,7 @@
  */
 
 // Configuration Constants
-const VISUALIZE_BASE = true; // Set to false to disable base plan visualization
+const VISUALIZE_BASE = false; // Set to false to disable base plan visualization
 
 // Wall and rampart maintenance configuration - hit points by RCL
 const WALL_TARGET_HITS = {
@@ -310,31 +310,11 @@ function placeCoreStamp(room, spawn) {
     // Place core structures around spawn
     const anchor = { x: spawn.pos.x, y: spawn.pos.y }; // Anchor to the spawn position
     const coreStamp = [
-        // === CENTER: SPAWN (anchor point) ===
+        // === NON-ROAD STRUCTURES FIRST (to prevent roads underneath) ===
+        
+        // CENTER: SPAWN (anchor point)
         [0, 0, STRUCTURE_SPAWN],       // Spawn at center (anchor)
         
-        // === COMPLETE ROAD PERIMETER (10x5 rectangle) ===
-        // Top edge (y = -2) - expanded by 2 tiles
-        [-5, -2, STRUCTURE_ROAD], [-4, -2, STRUCTURE_ROAD], [-3, -2, STRUCTURE_ROAD], [-2, -2, STRUCTURE_ROAD], [-1, -2, STRUCTURE_ROAD], [0, -2, STRUCTURE_ROAD], 
-        [1, -2, STRUCTURE_ROAD], [2, -2, STRUCTURE_ROAD], [3, -2, STRUCTURE_ROAD], [4, -2, STRUCTURE_ROAD],
-        
-        // Second row (y = -1) - roads with structures
-        [-5, -1, STRUCTURE_ROAD], [-4, -1, STRUCTURE_ROAD], [-3, -1, STRUCTURE_ROAD], [-2, -1, STRUCTURE_ROAD], [-1, -1, STRUCTURE_ROAD], [0, -1, STRUCTURE_ROAD], 
-        [1, -1, STRUCTURE_ROAD], [2, -1, STRUCTURE_ROAD], [3, -1, STRUCTURE_ROAD], [4, -1, STRUCTURE_ROAD],
-        
-        // Third row (y = 0) - roads with structures  
-        [-5, 0, STRUCTURE_ROAD], [-4, 0, STRUCTURE_ROAD], [-3, 0, STRUCTURE_ROAD], [-2, 0, STRUCTURE_ROAD], [-1, 0, STRUCTURE_ROAD], [0, 0, STRUCTURE_ROAD], 
-        [1, 0, STRUCTURE_ROAD], [2, 0, STRUCTURE_ROAD], [3, 0, STRUCTURE_ROAD], [4, 0, STRUCTURE_ROAD],
-        
-        // Fourth row (y = 1) - roads with structures
-        [-5, 1, STRUCTURE_ROAD], [-4, 1, STRUCTURE_ROAD], [-3, 1, STRUCTURE_ROAD], [-2, 1, STRUCTURE_ROAD], [-1, 1, STRUCTURE_ROAD], [0, 1, STRUCTURE_ROAD], 
-        [1, 1, STRUCTURE_ROAD], [2, 1, STRUCTURE_ROAD], [3, 1, STRUCTURE_ROAD], [4, 1, STRUCTURE_ROAD],
-        
-        // Bottom edge (y = 2) - expanded by 2 tiles
-        [-5, 2, STRUCTURE_ROAD], [-4, 2, STRUCTURE_ROAD], [-3, 2, STRUCTURE_ROAD], [-2, 2, STRUCTURE_ROAD], [-1, 2, STRUCTURE_ROAD], [0, 2, STRUCTURE_ROAD], 
-        [1, 2, STRUCTURE_ROAD], [2, 2, STRUCTURE_ROAD], [3, 2, STRUCTURE_ROAD], [4, 2, STRUCTURE_ROAD],
-        
-        // === STRUCTURES (placed on top of roads) ===
         // 5 Extensions in plus pattern - moved left to utilize expanded space
         [-3, -1, STRUCTURE_EXTENSION], // Top extension
         [-4, 0, STRUCTURE_EXTENSION],  // Left extension  
@@ -353,7 +333,34 @@ function placeCoreStamp(room, spawn) {
 
         // 2 Towers spread out in the expanded right area
         [4, -1, STRUCTURE_TOWER],
-        [4, 1, STRUCTURE_TOWER]
+        [4, 1, STRUCTURE_TOWER],
+        
+        // === ROADS PLACED ONLY WHERE NO OTHER STRUCTURES EXIST ===
+        // Complete road perimeter (10x5 rectangle) - excluding positions with buildings
+        
+        // Top edge (y = -2) - expanded by 2 tiles
+        [-5, -2, STRUCTURE_ROAD], [-4, -2, STRUCTURE_ROAD], [-3, -2, STRUCTURE_ROAD], [-2, -2, STRUCTURE_ROAD], [-1, -2, STRUCTURE_ROAD], [0, -2, STRUCTURE_ROAD], 
+        [1, -2, STRUCTURE_ROAD], [2, -2, STRUCTURE_ROAD], [3, -2, STRUCTURE_ROAD], [4, -2, STRUCTURE_ROAD],
+        
+        // Second row (y = -1) - roads except where towers are
+        [-5, -1, STRUCTURE_ROAD], [-4, -1, STRUCTURE_ROAD], [-2, -1, STRUCTURE_ROAD], [-1, -1, STRUCTURE_ROAD], [0, -1, STRUCTURE_ROAD], 
+        [1, -1, STRUCTURE_ROAD], [2, -1, STRUCTURE_ROAD], [3, -1, STRUCTURE_ROAD], // Skip [4,-1] - tower there
+        
+        // Third row (y = 0) - roads except where extensions/storage/terminal/link are  
+        [-5, 0, STRUCTURE_ROAD], [-1, 0, STRUCTURE_ROAD], [0, 0, STRUCTURE_ROAD], [1, 0, STRUCTURE_ROAD], 
+        // Skip [-4,0], [-3,0], [-2,0] - extensions there
+        // Skip [2,0] - storage there
+        // Skip [3,0] - terminal there
+        // Skip [4,0] - link there
+        
+        // Fourth row (y = 1) - roads except where extensions and towers are
+        [-5, 1, STRUCTURE_ROAD], [-4, 1, STRUCTURE_ROAD], [-2, 1, STRUCTURE_ROAD], [-1, 1, STRUCTURE_ROAD], [0, 1, STRUCTURE_ROAD], 
+        [1, 1, STRUCTURE_ROAD], [2, 1, STRUCTURE_ROAD], [3, 1, STRUCTURE_ROAD], // Skip [4,1] - tower there
+        // Skip [-3,1] - extension there
+        
+        // Bottom edge (y = 2) - expanded by 2 tiles
+        [-5, 2, STRUCTURE_ROAD], [-4, 2, STRUCTURE_ROAD], [-3, 2, STRUCTURE_ROAD], [-2, 2, STRUCTURE_ROAD], [-1, 2, STRUCTURE_ROAD], [0, 2, STRUCTURE_ROAD], 
+        [1, 2, STRUCTURE_ROAD], [2, 2, STRUCTURE_ROAD], [3, 2, STRUCTURE_ROAD], [4, 2, STRUCTURE_ROAD]
     ];
     
     addStampToPlannedStructures(room, anchor, coreStamp);
@@ -364,19 +371,24 @@ function placeCoreStamp(room, spawn) {
 // Optimal extension field placement using distance transform
 function placeExtensionFieldsOptimal(room, spawn, distanceTransform) {
     const extensionStamp = [
-        // Complete road perimeter (5x5 square)
-        [-2, -2, STRUCTURE_ROAD], [-1, -2, STRUCTURE_ROAD], [0, -2, STRUCTURE_ROAD], [1, -2, STRUCTURE_ROAD], [2, -2, STRUCTURE_ROAD],
-        [-2, -1, STRUCTURE_ROAD], [-1, -1, STRUCTURE_ROAD], [0, -1, STRUCTURE_ROAD], [1, -1, STRUCTURE_ROAD], [2, -1, STRUCTURE_ROAD],
-        [-2, 0, STRUCTURE_ROAD], [-1, 0, STRUCTURE_ROAD], [0, 0, STRUCTURE_ROAD], [1, 0, STRUCTURE_ROAD], [2, 0, STRUCTURE_ROAD],
-        [-2, 1, STRUCTURE_ROAD], [-1, 1, STRUCTURE_ROAD], [0, 1, STRUCTURE_ROAD], [1, 1, STRUCTURE_ROAD], [2, 1, STRUCTURE_ROAD],
-        [-2, 2, STRUCTURE_ROAD], [-1, 2, STRUCTURE_ROAD], [0, 2, STRUCTURE_ROAD], [1, 2, STRUCTURE_ROAD], [2, 2, STRUCTURE_ROAD],
-        
-        // Plus pattern rotated 45 degrees (diamond formation)
+        // Extensions first to prevent roads underneath
         [0, -1, STRUCTURE_EXTENSION], // Top
         [-1, 0, STRUCTURE_EXTENSION], // Left
         [0, 0, STRUCTURE_EXTENSION],  // Center
         [1, 0, STRUCTURE_EXTENSION],  // Right
-        [0, 1, STRUCTURE_EXTENSION]   // Bottom
+        [0, 1, STRUCTURE_EXTENSION],  // Bottom
+        
+        // Roads only where no extensions exist (5x5 perimeter minus extension positions)
+        [-2, -2, STRUCTURE_ROAD], [-1, -2, STRUCTURE_ROAD], [1, -2, STRUCTURE_ROAD], [2, -2, STRUCTURE_ROAD], // Top row (skip center)
+        [-2, -1, STRUCTURE_ROAD], [2, -1, STRUCTURE_ROAD], // Second row sides only
+        [-2, 0, STRUCTURE_ROAD], [2, 0, STRUCTURE_ROAD],   // Third row sides only  
+        [-2, 1, STRUCTURE_ROAD], [2, 1, STRUCTURE_ROAD],   // Fourth row sides only
+        [-2, 2, STRUCTURE_ROAD], [-1, 2, STRUCTURE_ROAD], [0, 2, STRUCTURE_ROAD], [1, 2, STRUCTURE_ROAD], [2, 2, STRUCTURE_ROAD], // Bottom row
+        
+        // Fill in road positions that don't conflict with extensions
+        [0, -2, STRUCTURE_ROAD],  // Top center
+        [-1, -1, STRUCTURE_ROAD], [1, -1, STRUCTURE_ROAD], // Second row (skip extension)
+        [-1, 1, STRUCTURE_ROAD], [1, 1, STRUCTURE_ROAD]    // Fourth row (skip extension)
     ];
     
     const spawnPos = spawn.pos;
@@ -505,16 +517,15 @@ function placeControllerStamp(room, controller, anchor) {
 function placeDefenseStampsOptimal(room, spawn, distanceTransform) {
     // Define a condensed 2x2 turret cluster with a surrounding road border
     const turretClusterStamp = [
-        // Border roads (top row)
-        [-1, -1, STRUCTURE_ROAD], [0, -1, STRUCTURE_ROAD], [1, -1, STRUCTURE_ROAD], [2, -1, STRUCTURE_ROAD],
-        // Border roads (middle rows sides)
-        [-1, 0, STRUCTURE_ROAD], [2, 0, STRUCTURE_ROAD],
-        [-1, 1, STRUCTURE_ROAD], [2, 1, STRUCTURE_ROAD],
-        // Border roads (bottom row)
-        [-1, 2, STRUCTURE_ROAD], [0, 2, STRUCTURE_ROAD], [1, 2, STRUCTURE_ROAD], [2, 2, STRUCTURE_ROAD],
-        // 4 Turrets in a condensed 2x2 square
+        // 4 Turrets first to prevent roads underneath
         [0, 0, STRUCTURE_TOWER], [1, 0, STRUCTURE_TOWER],
-        [0, 1, STRUCTURE_TOWER], [1, 1, STRUCTURE_TOWER]
+        [0, 1, STRUCTURE_TOWER], [1, 1, STRUCTURE_TOWER],
+        
+        // Border roads only where no turrets exist
+        [-1, -1, STRUCTURE_ROAD], [0, -1, STRUCTURE_ROAD], [1, -1, STRUCTURE_ROAD], [2, -1, STRUCTURE_ROAD], // Top row
+        [-1, 0, STRUCTURE_ROAD], [2, 0, STRUCTURE_ROAD],   // Middle rows sides only (turrets at [0,0] and [1,0])
+        [-1, 1, STRUCTURE_ROAD], [2, 1, STRUCTURE_ROAD],   // Middle rows sides only (turrets at [0,1] and [1,1])
+        [-1, 2, STRUCTURE_ROAD], [0, 2, STRUCTURE_ROAD], [1, 2, STRUCTURE_ROAD], [2, 2, STRUCTURE_ROAD]  // Bottom row
     ];
     
     const spawnPos = spawn.pos;
@@ -1023,9 +1034,61 @@ function addStampToPlannedStructures(room, anchor, stamp) {
     }
 }
 
+// Create cost matrix for pathfinding that avoids walls and expensive structures
+function createRoadPlanningCostMatrix(room) {
+    const costs = new PathFinder.CostMatrix();
+    const terrain = new Room.Terrain(room.name);
+    
+    // Set costs for terrain
+    for (let x = 0; x < 50; x++) {
+        for (let y = 0; y < 50; y++) {
+            const terrainType = terrain.get(x, y);
+            if (terrainType === TERRAIN_MASK_WALL) {
+                costs.set(x, y, 255); // Impassable walls
+            } else if (terrainType === TERRAIN_MASK_SWAMP) {
+                costs.set(x, y, 5); // Prefer not to use swamps but allow if needed
+            } else {
+                costs.set(x, y, 1); // Plain terrain
+            }
+        }
+    }
+    
+    // Avoid existing walls and ramparts (very expensive to go through)
+    const walls = room.find(FIND_STRUCTURES, {
+        filter: s => s.structureType === STRUCTURE_WALL || s.structureType === STRUCTURE_RAMPART
+    });
+    walls.forEach(wall => {
+        costs.set(wall.pos.x, wall.pos.y, 255); // Make walls impassable
+    });
+    
+    // Avoid planned walls and ramparts
+    if (room.memory.plannedStructures) {
+        room.memory.plannedStructures.forEach(planned => {
+            if (planned.type === STRUCTURE_WALL || planned.type === STRUCTURE_RAMPART) {
+                costs.set(planned.x, planned.y, 255); // Make planned walls impassable
+            } else if (planned.type !== STRUCTURE_ROAD) {
+                costs.set(planned.x, planned.y, 10); // Avoid other planned structures but allow if needed
+            }
+        });
+    }
+    
+    // Prefer existing roads
+    const roads = room.find(FIND_STRUCTURES, {
+        filter: s => s.structureType === STRUCTURE_ROAD
+    });
+    roads.forEach(road => {
+        costs.set(road.pos.x, road.pos.y, 1); // Roads are good
+    });
+    
+    return costs;
+}
+
 // Smart road network planning - comprehensive connectivity
 function planRoadNetwork(room, anchor, sources, controller) {
     console.log('Planning comprehensive road network...');
+    
+    // Create cost matrix to avoid walls and expensive structures
+    const costMatrix = createRoadPlanningCostMatrix(room);
     
     // Key positions for road planning
     const corePos = new RoomPosition(anchor.x, anchor.y, room.name);
@@ -1078,25 +1141,37 @@ function planRoadNetwork(room, anchor, sources, controller) {
     
     // 1. Connect spawn to all sources
     sources.forEach((source, index) => {
-        const path = PathFinder.search(spawnPos, { pos: source.pos, range: 2 }).path;
+        const path = PathFinder.search(spawnPos, { pos: source.pos, range: 2 }, {
+            roomCallback: () => costMatrix,
+            maxRooms: 1
+        }).path;
         addPathAsRoads(room, path, `Spawn → Source ${index + 1}`);
     });
     
     // 2. Connect spawn to controller
-    const controllerPath = PathFinder.search(spawnPos, { pos: controllerPos, range: 3 }).path;
+    const controllerPath = PathFinder.search(spawnPos, { pos: controllerPos, range: 3 }, {
+        roomCallback: () => costMatrix,
+        maxRooms: 1
+    }).path;
     addPathAsRoads(room, controllerPath, 'Spawn → Controller');
     
     // 3. Connect spawn to each extension field
     extensionFields.forEach(field => {
         const fieldPos = new RoomPosition(field.x, field.y, room.name);
-        const path = PathFinder.search(spawnPos, { pos: fieldPos, range: 2 }).path;
+        const path = PathFinder.search(spawnPos, { pos: fieldPos, range: 2 }, {
+            roomCallback: () => costMatrix,
+            maxRooms: 1
+        }).path;
         addPathAsRoads(room, path, `Spawn → ${field.name}`);
     });
     
     // 4. Connect spawn to tower clusters
     towerClusters.forEach(cluster => {
         const clusterPos = new RoomPosition(cluster.x, cluster.y, room.name);
-        const path = PathFinder.search(spawnPos, { pos: clusterPos, range: 2 }).path;
+        const path = PathFinder.search(spawnPos, { pos: clusterPos, range: 2 }, {
+            roomCallback: () => costMatrix,
+            maxRooms: 1
+        }).path;
         addPathAsRoads(room, path, `Spawn → ${cluster.name}`);
     });
     
@@ -1110,7 +1185,10 @@ function planRoadNetwork(room, anchor, sources, controller) {
             if (distance <= 15) { // Connect if reasonably close
                 const pos1 = new RoomPosition(field1.x, field1.y, room.name);
                 const pos2 = new RoomPosition(field2.x, field2.y, room.name);
-                const path = PathFinder.search(pos1, { pos: pos2, range: 2 }).path;
+                const path = PathFinder.search(pos1, { pos: pos2, range: 2 }, {
+                    roomCallback: () => costMatrix,
+                    maxRooms: 1
+                }).path;
                 addPathAsRoads(room, path, `${field1.name} → ${field2.name}`);
             }
         }
@@ -1122,10 +1200,19 @@ function addPathAsRoads(room, path, routeName = 'Unknown Route') {
     let roadsAdded = 0;
     let roadsSkipped = 0;
     let structureConflicts = 0;
+    let wallConflicts = 0;
+    
+    const terrain = new Room.Terrain(room.name);
     
     // Place roads on every tile of the path except start and end positions for continuous connections
     for (let i = 1; i < path.length - 1; i++) {
         const pos = path[i];
+        
+        // Skip if position is a wall
+        if (terrain.get(pos.x, pos.y) === TERRAIN_MASK_WALL) {
+            wallConflicts++;
+            continue; // Cannot place road on wall terrain
+        }
         
         // Check if there's already a structure planned at this position
         const existingPlanned = room.memory.plannedStructures.filter(s => s.x === pos.x && s.y === pos.y);
@@ -1140,6 +1227,15 @@ function addPathAsRoads(room, path, routeName = 'Unknown Route') {
         if (hasRoadPlanned || hasRoadBuilt) {
             roadsSkipped++;
             continue; // Road already exists, don't add duplicate
+        }
+        
+        // Skip if wall or rampart exists (planned or built) - these are impassable or expensive
+        const hasWallPlanned = existingPlanned.some(s => s.type === STRUCTURE_WALL || s.type === STRUCTURE_RAMPART);
+        const hasWallBuilt = existingBuilt.some(s => s.structureType === STRUCTURE_WALL || s.structureType === STRUCTURE_RAMPART);
+        
+        if (hasWallPlanned || hasWallBuilt) {
+            wallConflicts++;
+            continue; // Don't place road through walls/ramparts - extremely expensive
         }
         
         // Skip if non-road structure exists (planned or built)
@@ -1161,8 +1257,8 @@ function addPathAsRoads(room, path, routeName = 'Unknown Route') {
     }
     
     // Log road placement summary
-    if (roadsAdded > 0 || roadsSkipped > 0 || structureConflicts > 0) {
-        console.log(`🛣️ ${routeName}: ${roadsAdded} roads added, ${roadsSkipped} duplicates skipped, ${structureConflicts} structure conflicts avoided`);
+    if (roadsAdded > 0 || roadsSkipped > 0 || structureConflicts > 0 || wallConflicts > 0) {
+        console.log(`🛣️ ${routeName}: ${roadsAdded} roads added, ${roadsSkipped} duplicates skipped, ${structureConflicts} structure conflicts avoided, ${wallConflicts} wall conflicts avoided`);
     }
 }
 
