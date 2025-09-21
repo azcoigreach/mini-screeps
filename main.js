@@ -23,6 +23,32 @@
  * - Energy flow: Sources → Containers → Haulers → Spawn/Extensions → Upgraders
  */
 
+// Configuration Constants
+const VISUALIZE_BASE = true; // Set to false to disable base plan visualization
+
+// Wall and rampart maintenance configuration - hit points by RCL
+const WALL_TARGET_HITS = {
+    1: 1000,        // RCL 1: Basic protection (1K hits)
+    2: 10000,       // RCL 2: Light fortification (10K hits)
+    3: 30000,       // RCL 3: Medium fortification (30K hits)
+    4: 100000,      // RCL 4: Strong fortification (100K hits)
+    5: 300000,      // RCL 5: Heavy fortification (300K hits)
+    6: 1000000,     // RCL 6: Fortress level (1M hits)
+    7: 3000000,     // RCL 7: Major fortress (3M hits)
+    8: 10000000     // RCL 8: Maximum fortress (10M hits)
+};
+
+const RAMPART_TARGET_HITS = {
+    1: 1000,        // RCL 1: Basic protection (1K hits)
+    2: 5000,        // RCL 2: Light fortification (5K hits)
+    3: 15000,       // RCL 3: Medium fortification (15K hits)
+    4: 50000,       // RCL 4: Strong fortification (50K hits)
+    5: 100000,      // RCL 5: Heavy fortification (100K hits)
+    6: 250000,      // RCL 6: Fortress level (250K hits)
+    7: 500000,      // RCL 7: Major fortress (500K hits)
+    8: 1000000      // RCL 8: Maximum fortress (1M hits)
+};
+
 module.exports.loop = function () {
     // Clean up memory
     for (const name in Memory.creeps) {
@@ -36,6 +62,9 @@ module.exports.loop = function () {
     if (!spawn) return;
     
     const room = spawn.room;
+    const sources = room.find(FIND_SOURCES);
+    
+
     
     // Count creeps by role
     const creeps = {
@@ -45,15 +74,27 @@ module.exports.loop = function () {
         builder: _.filter(Game.creeps, creep => creep.memory.role === 'builder')
     };
 
+
+
     // Plan base layout once
     if (!room.memory.basePlanned) {
         planBase(room);
         room.memory.basePlanned = true;
     }
 
-    // Create construction sites
-    if (Game.time % 10 === 0) {
+    // Create construction sites more frequently
+    if (Game.time % 5 === 0) {
         createMissingConstructionSites(room);
+    }
+
+    // Manage wall and rampart hit points
+    if (Game.time % 10 === 0) {
+        manageDefenseHitPoints(room);
+    }
+
+    // Clean up shared construction target if needed
+    if (Game.time % 5 === 0) {
+        cleanupSharedConstructionTarget(room);
     }
 
     // Spawn creeps based on needs
@@ -70,6 +111,27 @@ module.exports.loop = function () {
         runCreep(creep);
     }
 
+    // Visualize base plan every tick for debugging (toggle with VISUALIZE_BASE constant)
+    if (room.memory.basePlanned && VISUALIZE_BASE) {
+        visualizeBasePlan(room);
+    }
+    
+    // Force redistribution of unassigned creeps every tick
+    const energyCreeps = _.filter(Game.creeps, c => 
+        (c.memory.role === 'hauler' || c.memory.role === 'builder' || c.memory.role === 'upgrader') &&
+        !c.memory.assignedSource
+    );
+    
+    if (energyCreeps.length > 0) {
+        console.log(`🔄 Assigning ${energyCreeps.length} unassigned energy creeps...`);
+        
+        energyCreeps.forEach((creep, index) => {
+            const sourceIndex = index % sources.length;
+            creep.memory.assignedSource = sources[sourceIndex].id;
+            console.log(`${creep.name} (${creep.memory.role}): Assigned to source ${sources[sourceIndex].id.substr(-4)}`);
+        });
+    }
+
     // CPU management for Pixel earning
     manageCPUForPixels();
 }
@@ -83,6 +145,9 @@ function planBase(room) {
     room.memory.plannedStructures = [];
     room.memory.baseCenter = null;
     
+    // Calculate distance transform for optimal placement
+    const distanceTransform = calculateDistanceTransform(room);
+    
     // Find best anchor position using distance transform
     const anchor = findOptimalAnchor(room, controller, spawn);
     if (!anchor) {
@@ -92,6 +157,9 @@ function planBase(room) {
     
     room.memory.baseCenter = { x: anchor.x, y: anchor.y };
     console.log(`Base anchor positioned at ${anchor.x},${anchor.y}`);
+    
+    // Place road perimeter around spawn
+    placeSpawnRoadPerimeter(room, spawn);
     
     // Place core stamp (spawn area + extensions)
     placeCoreStamp(room, anchor);
@@ -104,11 +172,11 @@ function planBase(room) {
     // Place controller stamp (container + roads)
     placeControllerStamp(room, controller, anchor);
     
-    // Place extension field stamps around core
-    placeExtensionFields(room, anchor);
+    // Use distance transform to optimally place extension fields near spawn
+    placeExtensionFieldsOptimal(room, spawn, distanceTransform);
     
-    // Place defense stamps (towers)
-    placeDefenseStamps(room, anchor);
+    // Use distance transform to optimally place tower clusters near spawn
+    placeDefenseStampsOptimal(room, spawn, distanceTransform);
     
     // Place economy stamps (storage, terminal, links)
     placeEconomyStamps(room, anchor);
@@ -116,7 +184,73 @@ function planBase(room) {
     // Connect everything with roads
     planRoadNetwork(room, anchor, sources, controller);
     
+    // Use minimum cut to place walls with rampart gates for base security
+    placeWallsWithGates(room, spawn);
+    
     console.log(`Base planned with ${room.memory.plannedStructures.length} structures`);
+}
+
+// Calculate distance transform for the entire room
+function calculateDistanceTransform(room) {
+    const terrain = new Room.Terrain(room.name);
+    const distanceMatrix = new PathFinder.CostMatrix();
+    
+    // Initialize all positions
+    for (let x = 0; x < 50; x++) {
+        for (let y = 0; y < 50; y++) {
+            if (terrain.get(x, y) === TERRAIN_MASK_WALL) {
+                distanceMatrix.set(x, y, 0);
+            } else {
+                distanceMatrix.set(x, y, 255); // Max distance initially
+            }
+        }
+    }
+    
+    // Multi-pass distance transform
+    let changed = true;
+    while (changed) {
+        changed = false;
+        
+        // Forward pass
+        for (let x = 1; x < 49; x++) {
+            for (let y = 1; y < 49; y++) {
+                if (terrain.get(x, y) !== TERRAIN_MASK_WALL) {
+                    const current = distanceMatrix.get(x, y);
+                    const newDist = Math.min(
+                        distanceMatrix.get(x - 1, y) + 1,
+                        distanceMatrix.get(x, y - 1) + 1,
+                        distanceMatrix.get(x - 1, y - 1) + 1,
+                        current
+                    );
+                    if (newDist < current) {
+                        distanceMatrix.set(x, y, newDist);
+                        changed = true;
+                    }
+                }
+            }
+        }
+        
+        // Backward pass
+        for (let x = 48; x >= 1; x--) {
+            for (let y = 48; y >= 1; y--) {
+                if (terrain.get(x, y) !== TERRAIN_MASK_WALL) {
+                    const current = distanceMatrix.get(x, y);
+                    const newDist = Math.min(
+                        distanceMatrix.get(x + 1, y) + 1,
+                        distanceMatrix.get(x, y + 1) + 1,
+                        distanceMatrix.get(x + 1, y + 1) + 1,
+                        current
+                    );
+                    if (newDist < current) {
+                        distanceMatrix.set(x, y, newDist);
+                        changed = true;
+                    }
+                }
+            }
+        }
+    }
+    
+    return distanceMatrix;
 }
 
 // Distance transform to find best anchor position
@@ -174,6 +308,36 @@ function findOptimalAnchor(room, controller, spawn) {
     return bestPos;
 }
 
+// Place road perimeter around spawn
+function placeSpawnRoadPerimeter(room, spawn) {
+    const spawnPos = spawn.pos;
+    
+    // 3x3 road perimeter around spawn
+    const roadPositions = [
+        [-1, -1], [0, -1], [1, -1],  // Top row
+        [-1, 0],           [1, 0],   // Middle row (skip spawn center)
+        [-1, 1],  [0, 1],  [1, 1]    // Bottom row
+    ];
+    
+    roadPositions.forEach(([dx, dy]) => {
+        const x = spawnPos.x + dx;
+        const y = spawnPos.y + dy;
+        
+        if (x >= 2 && x <= 47 && y >= 2 && y <= 47) {
+            const terrain = new Room.Terrain(room.name);
+            if (terrain.get(x, y) !== TERRAIN_MASK_WALL) {
+                room.memory.plannedStructures.push({
+                    x: x,
+                    y: y,
+                    type: STRUCTURE_ROAD
+                });
+            }
+        }
+    });
+    
+
+}
+
 // Core stamp: Central area with key structures
 function placeCoreStamp(room, anchor) {
     const coreStamp = [
@@ -190,26 +354,65 @@ function placeCoreStamp(room, anchor) {
     addStampToPlannedStructures(room, anchor, coreStamp);
 }
 
-// Extension field stamps: Groups of extensions with filler access
-function placeExtensionFields(room, anchor) {
+
+
+// Optimal extension field placement using distance transform
+function placeExtensionFieldsOptimal(room, spawn, distanceTransform) {
     const extensionStamp = [
-        // 3x3 extension cluster
-        [-1, -1, STRUCTURE_EXTENSION], [0, -1, STRUCTURE_EXTENSION], [1, -1, STRUCTURE_EXTENSION],
-        [-1, 0, STRUCTURE_EXTENSION],  [0, 0, STRUCTURE_ROAD],       [1, 0, STRUCTURE_EXTENSION],
-        [-1, 1, STRUCTURE_EXTENSION],  [0, 1, STRUCTURE_EXTENSION],  [1, 1, STRUCTURE_EXTENSION]
+        // Plus pattern with road perimeter
+        [-2, -2, STRUCTURE_ROAD], [-1, -2, STRUCTURE_ROAD], [0, -2, STRUCTURE_ROAD], [1, -2, STRUCTURE_ROAD], [2, -2, STRUCTURE_ROAD],
+        [-2, -1, STRUCTURE_ROAD], [-2, 0, STRUCTURE_ROAD], [-2, 1, STRUCTURE_ROAD], [-2, 2, STRUCTURE_ROAD],
+        [2, -1, STRUCTURE_ROAD], [2, 0, STRUCTURE_ROAD], [2, 1, STRUCTURE_ROAD], [2, 2, STRUCTURE_ROAD],
+        [-1, 2, STRUCTURE_ROAD], [0, 2, STRUCTURE_ROAD], [1, 2, STRUCTURE_ROAD], [2, 2, STRUCTURE_ROAD],
+        
+        // Plus pattern extensions
+        [0, -1, STRUCTURE_EXTENSION], [-1, 0, STRUCTURE_EXTENSION], [1, 0, STRUCTURE_EXTENSION], [0, 1, STRUCTURE_EXTENSION]
     ];
     
-    // Place multiple extension fields around core
-    const fieldPositions = [
-        { x: anchor.x - 5, y: anchor.y - 5 },
-        { x: anchor.x + 5, y: anchor.y - 5 },
-        { x: anchor.x - 5, y: anchor.y + 5 },
-        { x: anchor.x + 5, y: anchor.y + 5 }
-    ];
+    const spawnPos = spawn.pos;
+    const candidatePositions = [];
     
-    for (const fieldPos of fieldPositions) {
-        if (isValidStampPosition(room, fieldPos, extensionStamp)) {
-            addStampToPlannedStructures(room, fieldPos, extensionStamp);
+    // Find candidate positions within reasonable distance of spawn
+    for (let x = Math.max(5, spawnPos.x - 15); x <= Math.min(44, spawnPos.x + 15); x++) {
+        for (let y = Math.max(5, spawnPos.y - 15); y <= Math.min(44, spawnPos.y + 15); y++) {
+            const distanceFromSpawn = Math.max(Math.abs(x - spawnPos.x), Math.abs(y - spawnPos.y));
+            const wallDistance = distanceTransform.get(x, y);
+            
+            // Good positions: close to spawn, far from walls, can fit stamp
+            if (distanceFromSpawn >= 3 && distanceFromSpawn <= 12 && wallDistance >= 3) {
+                if (isValidStampPosition(room, { x, y }, extensionStamp)) {
+                    candidatePositions.push({
+                        x, y,
+                        score: wallDistance * 2 - distanceFromSpawn * 0.5
+                    });
+                }
+            }
+        }
+    }
+    
+    // Sort by score and place best positions
+    candidatePositions.sort((a, b) => b.score - a.score);
+    
+    let placed = 0;
+    const maxExtensionFields = 8; // Limit number of extension fields
+    
+    for (const pos of candidatePositions) {
+        if (placed >= maxExtensionFields) break;
+        
+        // Check if too close to already placed fields
+        let tooClose = false;
+        for (let i = 0; i < placed; i++) {
+            const prev = candidatePositions[i];
+            const distance = Math.max(Math.abs(pos.x - prev.x), Math.abs(pos.y - prev.y));
+            if (distance < 6) { // Minimum spacing between fields
+                tooClose = true;
+                break;
+            }
+        }
+        
+        if (!tooClose && isValidStampPosition(room, pos, extensionStamp)) {
+            addStampToPlannedStructures(room, pos, extensionStamp);
+            placed++;
         }
     }
 }
@@ -258,25 +461,357 @@ function placeControllerStamp(room, controller, anchor) {
     }
 }
 
-// Defense stamps: Towers with optimal coverage
-function placeDefenseStamps(room, anchor) {
-    const towerStamp = [
-        [0, 0, STRUCTURE_TOWER]
+
+
+// Optimal tower placement using distance transform
+function placeDefenseStampsOptimal(room, spawn, distanceTransform) {
+    const towerClusterStamp = [
+        // Hallway-style tower cluster
+        [-2, -1, STRUCTURE_ROAD], [-1, -1, STRUCTURE_ROAD], [0, -1, STRUCTURE_ROAD], [1, -1, STRUCTURE_ROAD], [2, -1, STRUCTURE_ROAD],
+        [-2, 0, STRUCTURE_ROAD], [-1, 0, STRUCTURE_ROAD], [0, 0, STRUCTURE_ROAD], [1, 0, STRUCTURE_ROAD], [2, 0, STRUCTURE_ROAD],
+        [-2, 1, STRUCTURE_ROAD], [-1, 1, STRUCTURE_ROAD], [0, 1, STRUCTURE_ROAD], [1, 1, STRUCTURE_ROAD], [2, 1, STRUCTURE_ROAD],
+        [-1, -2, STRUCTURE_TOWER], [0, -2, STRUCTURE_TOWER], [1, -2, STRUCTURE_TOWER],
+        [-1, 2, STRUCTURE_TOWER], [0, 2, STRUCTURE_TOWER], [1, 2, STRUCTURE_TOWER]
     ];
     
-    // Place towers at strategic positions around base
-    const towerPositions = [
-        { x: anchor.x - 3, y: anchor.y },
-        { x: anchor.x + 3, y: anchor.y },
-        { x: anchor.x, y: anchor.y - 3 },
-        { x: anchor.x, y: anchor.y + 3 }
-    ];
+    const spawnPos = spawn.pos;
+    let bestPosition = null;
+    let bestScore = 0;
     
-    for (const pos of towerPositions) {
-        if (isValidStampPosition(room, pos, towerStamp)) {
-            addStampToPlannedStructures(room, pos, towerStamp);
+    // Find optimal position for tower cluster
+    for (let x = Math.max(5, spawnPos.x - 10); x <= Math.min(44, spawnPos.x + 10); x++) {
+        for (let y = Math.max(5, spawnPos.y - 10); y <= Math.min(44, spawnPos.y + 10); y++) {
+            const distanceFromSpawn = Math.max(Math.abs(x - spawnPos.x), Math.abs(y - spawnPos.y));
+            const wallDistance = distanceTransform.get(x, y);
+            
+            // Good positions: medium distance from spawn, far from walls
+            if (distanceFromSpawn >= 4 && distanceFromSpawn <= 8 && wallDistance >= 3) {
+                if (isValidStampPosition(room, { x, y }, towerClusterStamp)) {
+                    const score = wallDistance * 1.5 - distanceFromSpawn * 0.3;
+                    if (score > bestScore) {
+                        bestScore = score;
+                        bestPosition = { x, y };
+                    }
+                }
+            }
         }
     }
+    
+    if (bestPosition) {
+        addStampToPlannedStructures(room, bestPosition, towerClusterStamp);
+    }
+}
+
+// Wall and rampart gate placement - block room entrances with walls and rampart gates
+function placeWallsWithGates(room, spawn) {
+    const terrain = new Room.Terrain(room.name);
+    
+    console.log('🚪 Finding room entrance points for blocking...');
+    
+    // Find room edge entrance points only (ignore internal chokepoints)
+    const entrances = findRoomEntrances(terrain);
+    console.log(`Found ${entrances.length} room entrance groups`);
+    
+    // Debug: Log each entrance found
+    entrances.forEach((entrance, index) => {
+        console.log(`Entrance ${index + 1}: ${entrance.direction} at (${entrance.x},${entrance.y}) width ${entrance.width}`);
+    });
+    
+    const wallPositions = [];
+    const rampartPositions = [];
+    
+    // Process each entrance and place blocking walls with rampart gates
+    entrances.forEach(entrance => {
+        const defenseStructures = blockEntranceWithWallsAndGates(entrance, terrain);
+        wallPositions.push(...defenseStructures.walls);
+        rampartPositions.push(...defenseStructures.ramparts);
+    });
+    
+    // Remove duplicates for walls
+    const uniqueWalls = [];
+    const wallPositionSet = new Set();
+    
+    for (const wall of wallPositions) {
+        const key = `${wall.x},${wall.y}`;
+        if (!wallPositionSet.has(key) && terrain.get(wall.x, wall.y) !== TERRAIN_MASK_WALL) {
+            wallPositionSet.add(key);
+            uniqueWalls.push(wall);
+        }
+    }
+    
+    // Remove duplicates for ramparts
+    const uniqueRamparts = [];
+    const rampartPositionSet = new Set();
+    
+    for (const rampart of rampartPositions) {
+        const key = `${rampart.x},${rampart.y}`;
+        if (!rampartPositionSet.has(key) && !wallPositionSet.has(key) && terrain.get(rampart.x, rampart.y) !== TERRAIN_MASK_WALL) {
+            rampartPositionSet.add(key);
+            uniqueRamparts.push(rampart);
+        }
+    }
+    
+    // Add walls to planned structures
+    uniqueWalls.forEach(pos => {
+        room.memory.plannedStructures.push({
+            x: pos.x,
+            y: pos.y,
+            type: STRUCTURE_WALL
+        });
+    });
+    
+    // Add rampart gates to planned structures
+    uniqueRamparts.forEach(pos => {
+        room.memory.plannedStructures.push({
+            x: pos.x,
+            y: pos.y,
+            type: STRUCTURE_RAMPART
+        });
+    });
+    
+    console.log(`🛡️ Entrance defense: ${uniqueWalls.length} walls and ${uniqueRamparts.length} rampart gates blocking room entrances`);
+    
+    // Log efficiency
+    const roomArea = calculateOpenRoomArea(terrain);
+    const totalDefenses = uniqueWalls.length + uniqueRamparts.length;
+    const efficiency = roomArea / totalDefenses;
+    console.log(`Defense efficiency: ${efficiency.toFixed(1)} open tiles protected per defense structure`);
+}
+
+
+
+// Find room entrance points along the edges
+function findRoomEntrances(terrain) {
+    const entrances = [];
+    
+    // Check all room edges for openings
+    const edges = [
+        { start: [0, 0], end: [49, 0], dir: 'top' },      // Top edge
+        { start: [0, 49], end: [49, 49], dir: 'bottom' }, // Bottom edge
+        { start: [0, 0], end: [0, 49], dir: 'left' },     // Left edge
+        { start: [49, 0], end: [49, 49], dir: 'right' }   // Right edge
+    ];
+    
+    edges.forEach(edge => {
+        const positions = getEdgePositions(edge.start, edge.end);
+        
+        for (const pos of positions) {
+            if (terrain.get(pos.x, pos.y) !== TERRAIN_MASK_WALL) {
+                // This is an entrance - check how wide it is
+                const entranceWidth = measureEntranceWidth(pos.x, pos.y, edge.dir, terrain);
+                
+                entrances.push({
+                    x: pos.x,
+                    y: pos.y,
+                    width: entranceWidth,
+                    direction: edge.dir,
+                    type: 'entrance'
+                });
+            }
+        }
+    });
+    
+    // Group nearby entrance points and pick the center of each group
+    return consolidateEntrances(entrances);
+}
+
+// Get all positions along an edge
+function getEdgePositions(start, end) {
+    const positions = [];
+    const [x1, y1] = start;
+    const [x2, y2] = end;
+    
+    if (x1 === x2) { // Vertical edge
+        for (let y = Math.min(y1, y2); y <= Math.max(y1, y2); y++) {
+            positions.push({ x: x1, y: y });
+        }
+    } else { // Horizontal edge
+        for (let x = Math.min(x1, x2); x <= Math.max(x1, x2); x++) {
+            positions.push({ x: x, y: y1 });
+        }
+    }
+    
+    return positions;
+}
+
+// Measure how wide an entrance is
+function measureEntranceWidth(x, y, direction, terrain) {
+    let width = 1;
+    
+    if (direction === 'top' || direction === 'bottom') {
+        // Horizontal entrance - check left and right
+        let left = x - 1, right = x + 1;
+        while (left >= 0 && terrain.get(left, y) !== TERRAIN_MASK_WALL) {
+            width++;
+            left--;
+        }
+        while (right <= 49 && terrain.get(right, y) !== TERRAIN_MASK_WALL) {
+            width++;
+            right++;
+        }
+    } else {
+        // Vertical entrance - check up and down
+        let up = y - 1, down = y + 1;
+        while (up >= 0 && terrain.get(x, up) !== TERRAIN_MASK_WALL) {
+            width++;
+            up--;
+        }
+        while (down <= 49 && terrain.get(x, down) !== TERRAIN_MASK_WALL) {
+            width++;
+            down++;
+        }
+    }
+    
+    return width;
+}
+
+// Consolidate nearby entrance points into single strategic positions
+function consolidateEntrances(entrances) {
+    const consolidated = [];
+    const processed = new Set();
+    
+    for (let i = 0; i < entrances.length; i++) {
+        if (processed.has(i)) continue;
+        
+        const entrance = entrances[i];
+        const group = [entrance];
+        processed.add(i);
+        
+        // Find nearby entrances in the same group (more generous grouping)
+        for (let j = i + 1; j < entrances.length; j++) {
+            if (processed.has(j)) continue;
+            
+            const other = entrances[j];
+            const distance = Math.max(Math.abs(entrance.x - other.x), Math.abs(entrance.y - other.y));
+            
+            // Group entrances that are close and on the same edge
+            if (distance <= 5 && entrance.direction === other.direction) {
+                group.push(other);
+                processed.add(j);
+            }
+        }
+        
+        // Calculate the bounds of the entire entrance group
+        if (entrance.direction === 'top' || entrance.direction === 'bottom') {
+            // Horizontal entrance - find min/max X coordinates
+            const minX = Math.min(...group.map(e => e.x - Math.floor(e.width/2)));
+            const maxX = Math.max(...group.map(e => e.x + Math.floor(e.width/2)));
+            const centerX = Math.round((minX + maxX) / 2);
+            const totalWidth = maxX - minX + 1;
+            
+            consolidated.push({
+                x: centerX,
+                y: entrance.y,
+                width: totalWidth,
+                direction: entrance.direction,
+                type: 'entrance',
+                groupSize: group.length
+            });
+        } else {
+            // Vertical entrance - find min/max Y coordinates  
+            const minY = Math.min(...group.map(e => e.y - Math.floor(e.width/2)));
+            const maxY = Math.max(...group.map(e => e.y + Math.floor(e.width/2)));
+            const centerY = Math.round((minY + maxY) / 2);
+            const totalWidth = maxY - minY + 1;
+            
+            consolidated.push({
+                x: entrance.x,
+                y: centerY,
+                width: totalWidth,
+                direction: entrance.direction,
+                type: 'entrance',
+                groupSize: group.length
+            });
+        }
+    }
+    
+    return consolidated;
+}
+
+
+
+// Block an entrance with ramparts (placed 2 tiles inward from room edge)
+function blockEntranceWithWallsAndGates(entrance, terrain) {
+    const walls = [];
+    const ramparts = [];
+    const { x, y, direction, width } = entrance;
+    
+    // Calculate the inward position (2 tiles from room edge as per building rules)
+    let blockX = x;
+    let blockY = y;
+    
+    // Move block position 2 tiles inward from the edge
+    if (direction === 'top') {
+        blockY = 2; // 2 tiles down from top edge
+    } else if (direction === 'bottom') {
+        blockY = 47; // 2 tiles up from bottom edge  
+    } else if (direction === 'left') {
+        blockX = 2; // 2 tiles right from left edge
+    } else if (direction === 'right') {
+        blockX = 47; // 2 tiles left from right edge
+    }
+    
+    console.log(`Blocking ${direction} entrance: center (${x},${y}) width ${width}`);
+    
+    // Calculate entrance span and gate positions
+    let positions = [];
+    if (direction === 'top' || direction === 'bottom') {
+        // Horizontal entrance - place defenses along x-axis at fixed y
+        const startX = Math.max(2, x - Math.floor(width/2));
+        const endX = Math.min(47, x + Math.floor(width/2));
+        
+        for (let checkX = startX; checkX <= endX; checkX++) {
+            if (terrain.get(checkX, blockY) !== TERRAIN_MASK_WALL) {
+                positions.push({ x: checkX, y: blockY });
+            }
+        }
+    } else {
+        // Vertical entrance - place defenses along y-axis at fixed x
+        const startY = Math.max(2, y - Math.floor(width/2));
+        const endY = Math.min(47, y + Math.floor(width/2));
+        
+        for (let checkY = startY; checkY <= endY; checkY++) {
+            if (terrain.get(blockX, checkY) !== TERRAIN_MASK_WALL) {
+                positions.push({ x: blockX, y: checkY });
+            }
+        }
+    }
+    
+    // Place walls on most positions, rampart gates in the middle 2 positions
+    const totalPositions = positions.length;
+    if (totalPositions <= 2) {
+        // Small entrance - all ramparts (gates)
+        ramparts.push(...positions);
+    } else {
+        // Larger entrance - walls on edges, 2 rampart gates in middle
+        const middleStart = Math.floor((totalPositions - 2) / 2);
+        const middleEnd = middleStart + 1;
+        
+        positions.forEach((pos, index) => {
+            if (index === middleStart || index === middleEnd) {
+                ramparts.push(pos);
+            } else {
+                walls.push(pos);
+            }
+        });
+    }
+    
+    return { walls, ramparts };
+}
+
+// Calculate total open area in room
+function calculateOpenRoomArea(terrain) {
+    let openArea = 0;
+    
+    for (let x = 0; x < 50; x++) {
+        for (let y = 0; y < 50; y++) {
+            if (terrain.get(x, y) !== TERRAIN_MASK_WALL) {
+                openArea++;
+            }
+        }
+    }
+    
+    return openArea;
 }
 
 // Economy stamps: Storage, terminal, links
@@ -322,56 +857,157 @@ function addStampToPlannedStructures(room, anchor, stamp) {
     }
 }
 
-// Smart road network planning
+// Smart road network planning - comprehensive connectivity
 function planRoadNetwork(room, anchor, sources, controller) {
-    // Connect sources to base
-    for (const source of sources) {
-        const path = PathFinder.search(source.pos, { pos: new RoomPosition(anchor.x, anchor.y, room.name), range: 2 }).path;
-        addPathAsRoads(room, path);
-    }
+    console.log('Planning comprehensive road network...');
     
-    // Connect base to controller
-    const controllerPath = PathFinder.search(
-        new RoomPosition(anchor.x, anchor.y, room.name),
-        { pos: controller.pos, range: 3 }
-    ).path;
-    addPathAsRoads(room, controllerPath);
+    // Key positions for road planning
+    const corePos = new RoomPosition(anchor.x, anchor.y, room.name);
+    const controllerPos = controller.pos;
+    const spawn = room.find(FIND_MY_SPAWNS)[0];
+    const spawnPos = spawn.pos;
     
-    // Connect extension fields to base
-    const fieldPositions = [
-        { x: anchor.x - 5, y: anchor.y - 5 },
-        { x: anchor.x + 5, y: anchor.y - 5 },
-        { x: anchor.x - 5, y: anchor.y + 5 },
-        { x: anchor.x + 5, y: anchor.y + 5 }
-    ];
+    // Find placed extension fields and tower clusters from planned structures
+    const extensionFields = [];
+    const towerClusters = [];
     
-    for (const fieldPos of fieldPositions) {
-        const startPos = new RoomPosition(fieldPos.x, fieldPos.y, room.name);
-        const path = PathFinder.search(
-            startPos,
-            { pos: new RoomPosition(anchor.x, anchor.y, room.name), range: 2 }
-        ).path;
-        addPathAsRoads(room, path);
+    // Group planned structures by type and location
+    const structureGroups = {};
+    room.memory.plannedStructures.forEach(planned => {
+        if (planned.type === STRUCTURE_EXTENSION) {
+            const key = `${Math.floor(planned.x / 5)}_${Math.floor(planned.y / 5)}`;
+            if (!structureGroups[key]) {
+                structureGroups[key] = { extensions: [], x: planned.x, y: planned.y };
+            }
+            structureGroups[key].extensions.push(planned);
+        } else if (planned.type === STRUCTURE_TOWER) {
+            const key = `tower_${Math.floor(planned.x / 5)}_${Math.floor(planned.y / 5)}`;
+            if (!structureGroups[key]) {
+                structureGroups[key] = { towers: [], x: planned.x, y: planned.y };
+            }
+            structureGroups[key].towers = (structureGroups[key].towers || []);
+            structureGroups[key].towers.push(planned);
+        }
+    });
+    
+    // Create extension field centers
+    Object.values(structureGroups).forEach((group, index) => {
+        if (group.extensions && group.extensions.length >= 3) {
+            extensionFields.push({
+                x: group.x,
+                y: group.y,
+                name: `Ext Field ${index + 1}`
+            });
+        }
+        if (group.towers && group.towers.length >= 3) {
+            towerClusters.push({
+                x: group.x,
+                y: group.y,
+                name: `Tower Cluster ${index + 1}`
+            });
+        }
+    });
+    
+    console.log(`Core at (${anchor.x},${anchor.y}), planning roads to ${sources.length} sources, ${extensionFields.length} extension fields, ${towerClusters.length} tower clusters`);
+    
+    // 1. Connect spawn to all sources
+    sources.forEach((source, index) => {
+        const path = PathFinder.search(spawnPos, { pos: source.pos, range: 2 }).path;
+        addPathAsRoads(room, path, `Spawn → Source ${index + 1}`);
+    });
+    
+    // 2. Connect spawn to controller
+    const controllerPath = PathFinder.search(spawnPos, { pos: controllerPos, range: 3 }).path;
+    addPathAsRoads(room, controllerPath, 'Spawn → Controller');
+    
+    // 3. Connect spawn to each extension field
+    extensionFields.forEach(field => {
+        const fieldPos = new RoomPosition(field.x, field.y, room.name);
+        const path = PathFinder.search(spawnPos, { pos: fieldPos, range: 2 }).path;
+        addPathAsRoads(room, path, `Spawn → ${field.name}`);
+    });
+    
+    // 4. Connect spawn to tower clusters
+    towerClusters.forEach(cluster => {
+        const clusterPos = new RoomPosition(cluster.x, cluster.y, room.name);
+        const path = PathFinder.search(spawnPos, { pos: clusterPos, range: 2 }).path;
+        addPathAsRoads(room, path, `Spawn → ${cluster.name}`);
+    });
+    
+    // 5. Connect extension fields to each other for redundancy
+    for (let i = 0; i < extensionFields.length; i++) {
+        for (let j = i + 1; j < extensionFields.length; j++) {
+            const field1 = extensionFields[i];
+            const field2 = extensionFields[j];
+            const distance = Math.max(Math.abs(field1.x - field2.x), Math.abs(field1.y - field2.y));
+            
+            if (distance <= 15) { // Connect if reasonably close
+                const pos1 = new RoomPosition(field1.x, field1.y, room.name);
+                const pos2 = new RoomPosition(field2.x, field2.y, room.name);
+                const path = PathFinder.search(pos1, { pos: pos2, range: 2 }).path;
+                addPathAsRoads(room, path, `${field1.name} → ${field2.name}`);
+            }
+        }
     }
 }
 
-// Helper function: Add path positions as road structures
-function addPathAsRoads(room, path) {
-    for (let i = 1; i < path.length - 1; i += 2) { // Skip every other tile for efficiency
+// Enhanced helper function: Add path positions as road structures with logging
+function addPathAsRoads(room, path, routeName = 'Unknown Route') {
+    let roadsAdded = 0;
+    // Place roads on every tile of the path except start and end positions for continuous connections
+    for (let i = 1; i < path.length - 1; i++) {
         const pos = path[i];
+        
+        // Check if there's already a structure planned at this position
         const existing = room.memory.plannedStructures.find(s => s.x === pos.x && s.y === pos.y);
+        
         if (!existing) {
+            // No structure planned here, safe to place road
             room.memory.plannedStructures.push({
                 x: pos.x,
                 y: pos.y,
                 type: STRUCTURE_ROAD
             });
+            roadsAdded++;
+        } else if (existing.type === STRUCTURE_ROAD) {
+            // Road already planned here, no need to add another
+            continue;
+        } else {
+            // Another type of structure is planned here (spawn, extension, etc.)
+            // Don't place a road under it
+            continue;
         }
     }
 }
 
 function generateHexId() {
     return Math.floor(Math.random() * 65536).toString(16).padStart(4, '0');
+}
+
+// Helper function to get the source with least assigned energy-gathering creeps
+function getLeastUtilizedSource(room) {
+    const sources = room.find(FIND_SOURCES);
+    const energyGatheringCreeps = _.filter(Game.creeps, c => 
+        c.memory.role === 'hauler' || c.memory.role === 'builder' || c.memory.role === 'upgrader'
+    );
+    
+    const sourceAssignments = {};
+    for (const source of sources) {
+        sourceAssignments[source.id] = energyGatheringCreeps.filter(c => c.memory.assignedSource === source.id).length;
+    }
+    
+    let leastUtilizedSource = null;
+    let leastCount = 999;
+    
+    for (const source of sources) {
+        const count = sourceAssignments[source.id] || 0;
+        if (count < leastCount) {
+            leastCount = count;
+            leastUtilizedSource = source;
+        }
+    }
+    
+    return leastUtilizedSource;
 }
 
 // Simplified population control based on room controller level
@@ -395,33 +1031,48 @@ function spawnCreeps(spawn, creeps) {
     
     // Simple spawn priority: miner > hauler > upgrader > builder
     if (creeps.miner.length < populationTargets.miner) {
-        if (spawn.canCreateCreep(bodies.miner) === OK) {
+        if (energyAvailable >= bodyCosts.miner) {
             const name = 'mine:' + generateHexId();
-            spawn.createCreep(bodies.miner, name, { role: 'miner' });
+            const result = spawn.spawnCreep(bodies.miner, name, { memory: { role: 'miner' } });
+            if (result === OK) {
+                console.log(`Spawning miner: ${name}`);
+            }
             return;
         }
     }
     
     if (creeps.hauler.length < populationTargets.hauler) {
-        if (spawn.canCreateCreep(bodies.hauler) === OK) {
+        if (energyAvailable >= bodyCosts.hauler) {
             const name = 'haul:' + generateHexId();
-            spawn.createCreep(bodies.hauler, name, { role: 'hauler' });
+            const result = spawn.spawnCreep(bodies.hauler, name, { memory: { role: 'hauler' } });
+            if (result === OK) {
+                console.log(`Spawning hauler: ${name}`);
+                // Source assignment will happen in the main loop for unassigned creeps
+            }
             return;
         }
     }
     
     if (creeps.upgrader.length < populationTargets.upgrader) {
-        if (spawn.canCreateCreep(bodies.upgrader) === OK) {
+        if (energyAvailable >= bodyCosts.upgrader) {
             const name = 'upgr:' + generateHexId();
-            spawn.createCreep(bodies.upgrader, name, { role: 'upgrader' });
+            const result = spawn.spawnCreep(bodies.upgrader, name, { memory: { role: 'upgrader' } });
+            if (result === OK) {
+                console.log(`Spawning upgrader: ${name}`);
+                // Source assignment will happen in the main loop for unassigned creeps
+            }
             return;
         }
     }
     
     if (creeps.builder.length < populationTargets.builder) {
-        if (spawn.canCreateCreep(bodies.builder) === OK) {
+        if (energyAvailable >= bodyCosts.builder) {
             const name = 'bldr:' + generateHexId();
-            spawn.createCreep(bodies.builder, name, { role: 'builder' });
+            const result = spawn.spawnCreep(bodies.builder, name, { memory: { role: 'builder' } });
+            if (result === OK) {
+                console.log(`Spawning builder: ${name}`);
+                // Source assignment will happen in the main loop for unassigned creeps
+            }
             return;
         }
     }
@@ -431,7 +1082,7 @@ function spawnCreeps(spawn, creeps) {
 function getPopulationByRCL(rcl) {
     switch (rcl) {
         case 1:
-            return { miner: 1, hauler: 1, upgrader: 1, builder: 2 };
+            return { miner: 2, hauler: 1, upgrader: 1, builder: 2 };
         case 2:
             return { miner: 2, hauler: 3, upgrader: 2, builder: 4 };
         case 3:
@@ -495,20 +1146,30 @@ function getBodiesByEnergyCapacity(energyCapacity) {
 function createMissingConstructionSites(room) {
     if (!room.memory.plannedStructures) return;
     
+    const rcl = room.controller.level;
+    console.log(`🏗️ Creating construction sites for RCL ${rcl}...`);
+    
     // Limit construction sites to avoid spam
     const existingConstructionSites = room.find(FIND_CONSTRUCTION_SITES).length;
-    if (existingConstructionSites >= 5) return; // Max 5 construction sites at once
+    if (existingConstructionSites >= 15) return; // Allow more construction sites
     
     // Filter structures by current RCL to avoid error spam
-    const rcl = room.controller.level;
     const allowedStructures = getAllowedStructuresByRCL(rcl);
     
     let created = 0;
+    let rampartCount = 0;
+    let totalPlanned = 0;
+    
     for (const planned of room.memory.plannedStructures) {
-        if (created >= 3) break; // Create max 3 per tick to avoid CPU spike
+        totalPlanned++;
         
         // Skip structures not allowed at current RCL
-        if (!allowedStructures.includes(planned.type)) continue;
+        if (!allowedStructures.includes(planned.type)) {
+            if (planned.type === STRUCTURE_RAMPART) {
+                rampartCount++;
+            }
+            continue;
+        }
         
         const pos = new RoomPosition(planned.x, planned.y, room.name);
         const structures = pos.lookFor(LOOK_STRUCTURES);
@@ -522,9 +1183,22 @@ function createMissingConstructionSites(room) {
             const result = room.createConstructionSite(pos.x, pos.y, planned.type);
             if (result === OK) {
                 created++;
+                if (planned.type === STRUCTURE_RAMPART) {
+                    console.log(`✅ Created rampart construction site at (${pos.x},${pos.y})`);
+                }
+            } else {
+                console.log(`❌ Failed to create ${planned.type} at (${pos.x},${pos.y}): ${result}`);
             }
         }
+        
+        // Don't break too early - let more structures be created
+        if (created >= 10) break; // Increased limit
     }
+    
+    if (created > 0) {
+        console.log(`🏗️ Created ${created} construction sites (${rampartCount} ramparts waiting for RCL 2+)`);
+    }
+    console.log(`📊 Total planned structures: ${totalPlanned}, RCL ${rcl} allows: ${allowedStructures.join(', ')}`);
 }
 
 // Helper function: Get allowed structures by RCL to prevent construction errors
@@ -560,6 +1234,7 @@ function displayStatusDashboard(room, creeps) {
     const progressTotal = room.controller.progressTotal;
     const energyAvailable = room.energyAvailable;
     const energyCapacity = room.energyCapacityAvailable;
+    const sources = room.find(FIND_SOURCES);
     
     // Calculate progress percentage
     const progressPercent = ((progress / progressTotal) * 100).toFixed(1);
@@ -568,7 +1243,7 @@ function displayStatusDashboard(room, creeps) {
     const constructionSites = room.find(FIND_CONSTRUCTION_SITES).length;
     
     // Calculate energy flow (miners should be generating ~10 energy/tick per source)
-    const expectedEnergyPerTick = room.find(FIND_SOURCES).length * 10;
+    const expectedEnergyPerTick = sources.length * 10;
     
     // Check hauler efficiency (are they moving energy?)
     const busyHaulers = creeps.hauler.filter(h => h.store[RESOURCE_ENERGY] > 0).length;
@@ -577,7 +1252,7 @@ function displayStatusDashboard(room, creeps) {
     console.log(`\n=== BASE STATUS RCL ${rcl} ===`);
     console.log(`Controller: ${progress}/${progressTotal} (${progressPercent}%) - ${progressTotal - progress} to next RCL`);
     console.log(`Energy: ${energyAvailable}/${energyCapacity} (${((energyAvailable/energyCapacity)*100).toFixed(0)}%)`);
-    console.log(`Expected Flow: ${expectedEnergyPerTick} energy/tick from ${room.find(FIND_SOURCES).length} sources`);
+    console.log(`Expected Flow: ${expectedEnergyPerTick} energy/tick from ${sources.length} sources`);
     
     console.log(`\n--- POPULATION ---`);
     const targets = getPopulationByRCL(rcl);
@@ -609,6 +1284,137 @@ function displayStatusDashboard(room, creeps) {
     }
     
     console.log('========================\n');
+}
+
+// Base plan visualization - shows planned structures with color coding
+function visualizeBasePlan(room) {
+    if (!room.memory.plannedStructures || !room.memory.baseCenter) return;
+    
+    const visual = room.visual;
+    const anchor = room.memory.baseCenter;
+    
+    // Color scheme for different structure types
+    const structureColors = {
+        [STRUCTURE_SPAWN]: '#FFFFFF',
+        [STRUCTURE_EXTENSION]: '#FFE56D',
+        [STRUCTURE_STORAGE]: '#FF6B6B',
+        [STRUCTURE_CONTAINER]: '#4ECDC4',
+        [STRUCTURE_TOWER]: '#FF8E53',
+        [STRUCTURE_ROAD]: '#555555',
+        [STRUCTURE_LINK]: '#9B59B6',
+        [STRUCTURE_TERMINAL]: '#E67E22',
+        [STRUCTURE_RAMPART]: '#2ECC71',
+        [STRUCTURE_WALL]: '#95A5A6'
+    };
+            
+    // Visualize planned structures
+    room.memory.plannedStructures.forEach(planned => {
+        const color = structureColors[planned.type] || '#FFFFFF';
+        const pos = new RoomPosition(planned.x, planned.y, room.name);
+        
+        // Check if structure already exists
+        const existingStructures = pos.lookFor(LOOK_STRUCTURES);
+        const existingConstruction = pos.lookFor(LOOK_CONSTRUCTION_SITES);
+        const hasStructure = existingStructures.some(s => s.structureType === planned.type);
+        const hasConstruction = existingConstruction.some(c => c.structureType === planned.type);
+        
+        if (hasStructure) {
+            // Structure is built - show as solid
+            visual.circle(planned.x, planned.y, {
+                radius: 0.35,
+                fill: color,
+                opacity: 0.8
+            });
+        } else if (hasConstruction) {
+            // Under construction - show as dashed circle
+            visual.circle(planned.x, planned.y, {
+                radius: 0.35,
+                fill: 'transparent',
+                stroke: color,
+                strokeWidth: 0.15,
+                lineDash: [0.2, 0.1],
+                opacity: 0.7
+            });
+        } else {
+            // Planned but not built - show as dotted
+            visual.circle(planned.x, planned.y, {
+                radius: 0.25,
+                fill: 'transparent',
+                stroke: color,
+                strokeWidth: 0.1,
+                lineDash: [0.1, 0.1],
+                opacity: 0.5
+            });
+        }
+        
+        // Special visualization for roads
+        if (planned.type === STRUCTURE_ROAD) {
+            visual.circle(planned.x, planned.y, {
+                radius: 0.15,
+                fill: color,
+                opacity: hasStructure ? 0.6 : 0.3
+            });
+        }
+        
+        // Special visualization for walls
+        if (planned.type === STRUCTURE_WALL) {
+            visual.rect(planned.x - 0.4, planned.y - 0.4, 0.8, 0.8, {
+                fill: hasStructure ? color : 'transparent',
+                stroke: color,
+                strokeWidth: 0.15,
+                opacity: hasStructure ? 0.9 : 0.5
+            });
+        }
+        
+        // Special visualization for ramparts
+        if (planned.type === STRUCTURE_RAMPART) {
+            visual.rect(planned.x - 0.3, planned.y - 0.3, 0.6, 0.6, {
+                fill: 'transparent',
+                stroke: color,
+                strokeWidth: 0.1,
+                opacity: hasStructure ? 0.8 : 0.4
+            });
+        }
+    });
+    
+        
+    // Show legend in top-right corner
+    const legendX = 45;
+    const legendY = 5;
+    visual.rect(legendX - 2, legendY - 1, 4, 8, {
+        fill: '#000000',
+        opacity: 0.7,
+        stroke: '#FFFFFF',
+        strokeWidth: 0.1
+    });
+    visual.text('LEGEND', legendX, legendY, {
+        color: '#FFFFFF',
+        font: 0.4,
+        align: 'center'
+    });
+    
+    const legendItems = [
+        { color: '#FFE56D', text: 'Extensions' },
+        { color: '#4ECDC4', text: 'Containers' },
+        { color: '#FF8E53', text: 'Towers' },
+        { color: '#555555', text: 'Roads' },
+        { color: '#FF6B6B', text: 'Storage' },
+        { color: '#2ECC71', text: 'Ramparts' }
+    ];
+    
+    legendItems.forEach((item, index) => {
+        const y = legendY + 1 + (index * 0.8);
+        visual.circle(legendX - 1, y, {
+            radius: 0.15,
+            fill: item.color,
+            opacity: 0.8
+        });
+        visual.text(item.text, legendX - 0.5, y + 0.1, {
+            color: '#FFFFFF',
+            font: 0.3,
+            align: 'left'
+        });
+    });
 }
 
 function runCreep(creep) {
@@ -791,55 +1597,8 @@ function runHauler(creep) {
         });
 
         if (sourceContainers.length > 0) {
-            // Distribute haulers evenly across source containers instead of all going to closest
-            let target = null;
-            
-            // Check if hauler has an assigned source
-            if (creep.memory.assignedSource) {
-                const assignedContainer = sourceContainers.find(container => {
-                    const assignedSource = Game.getObjectById(creep.memory.assignedSource);
-                    return assignedSource && container.pos.getRangeTo(assignedSource) <= 2;
-                });
-                
-                if (assignedContainer && assignedContainer.store[RESOURCE_ENERGY] > 0) {
-                    target = assignedContainer;
-                } else {
-                    // Assigned source container is empty, clear assignment to find a new one
-                    delete creep.memory.assignedSource;
-                }
-            }
-            
-            // If no assignment or assigned container is empty, find best source to assign
-            if (!target) {
-                // Count haulers assigned to each source
-                const haulers = _.filter(Game.creeps, c => c.memory.role === 'hauler' && c.name !== creep.name);
-                const sourceAssignments = {};
-                
-                for (const source of sources) {
-                    sourceAssignments[source.id] = haulers.filter(h => h.memory.assignedSource === source.id).length;
-                }
-                
-                // Find source with least haulers assigned and available energy
-                let bestSource = null;
-                let leastAssigned = 999;
-                
-                for (const container of sourceContainers) {
-                    for (const source of sources) {
-                        if (container.pos.getRangeTo(source) <= 2) {
-                            const assignedCount = sourceAssignments[source.id] || 0;
-                            if (assignedCount < leastAssigned) {
-                                leastAssigned = assignedCount;
-                                bestSource = source;
-                                target = container;
-                            }
-                        }
-                    }
-                }
-                
-                if (bestSource) {
-                    creep.memory.assignedSource = bestSource.id;
-                }
-            }
+            // Use unified distribution system for all energy-gathering roles
+            const target = getDistributedEnergyContainer(creep, sourceContainers);
             
             if (target) {
                 if (creep.withdraw(target, RESOURCE_ENERGY) === ERR_NOT_IN_RANGE) {
@@ -855,7 +1614,7 @@ function runHauler(creep) {
             });
             
             if (droppedEnergy.length > 0) {
-                // Distribute haulers across dropped energy sources too
+                // Use unified source assignment for dropped energy too
                 let target = null;
                 
                 if (creep.memory.assignedSource) {
@@ -867,6 +1626,10 @@ function runHauler(creep) {
                 }
                 
                 if (!target) {
+                    // No assigned source or no energy near it, ensure we have a source assignment
+                    if (!creep.memory.assignedSource && sourceContainers.length > 0) {
+                        getDistributedEnergyContainer(creep, sourceContainers); // This will assign a source
+                    }
                     target = creep.pos.findClosestByPath(droppedEnergy);
                 }
                 
@@ -914,25 +1677,39 @@ function getDistributedEnergyContainer(creep, targets) {
     if (sourceContainers.length > 0) {
         // Check if creep has an assigned source
         if (creep.memory.assignedSource) {
-            const assignedContainer = sourceContainers.find(container => {
-                const assignedSource = Game.getObjectById(creep.memory.assignedSource);
-                return assignedSource && container.pos.getRangeTo(assignedSource) <= 2;
-            });
-            
-            if (assignedContainer && assignedContainer.store[RESOURCE_ENERGY] > 0) {
-                return assignedContainer;
+            const assignedSource = Game.getObjectById(creep.memory.assignedSource);
+            if (assignedSource) {
+                // Find container near this assigned source
+                const assignedContainer = sourceContainers.find(container => 
+                    container.pos.getRangeTo(assignedSource) <= 2
+                );
+                
+                if (assignedContainer) {
+                    // Valid assignment - return the container (even if empty)
+                    return assignedContainer;
+                } else {
+                    // No container near assigned source - distribute among available containers based on assigned source
+                    const sourceIndex = sources.findIndex(s => s.id === creep.memory.assignedSource);
+                    const containerIndex = sourceIndex % sourceContainers.length;
+                    return sourceContainers[containerIndex];
+                }
             } else {
-                // Assigned source container is empty, clear assignment
+                // Assigned source no longer exists, clear assignment
                 delete creep.memory.assignedSource;
             }
         }
         
-        // Find source with least assigned creeps of this role
-        const sameRoleCreeps = _.filter(Game.creeps, c => c.memory.role === creep.memory.role && c.name !== creep.name);
+        // No assignment or assignment was cleared - always assign one
+        
+        // Find source with least assigned creeps across ALL energy-gathering roles
+        const energyGatheringCreeps = _.filter(Game.creeps, c => 
+            (c.memory.role === 'hauler' || c.memory.role === 'builder' || c.memory.role === 'upgrader') && 
+            c.name !== creep.name
+        );
         const sourceAssignments = {};
         
         for (const source of sources) {
-            sourceAssignments[source.id] = sameRoleCreeps.filter(c => c.memory.assignedSource === source.id).length;
+            sourceAssignments[source.id] = energyGatheringCreeps.filter(c => c.memory.assignedSource === source.id).length;
         }
         
         let bestSource = null;
@@ -1022,41 +1799,245 @@ function runUpgrader(creep) {
     }
 }
 
+function manageDefenseHitPoints(room) {
+    const rcl = room.controller.level;
+    const wallTargetHits = WALL_TARGET_HITS[rcl] || WALL_TARGET_HITS[1];
+    const rampartTargetHits = RAMPART_TARGET_HITS[rcl] || RAMPART_TARGET_HITS[1];
+    
+    // Check walls
+    const walls = room.find(FIND_STRUCTURES, {
+        filter: (structure) => structure.structureType === STRUCTURE_WALL
+    });
+    
+    // Check ramparts
+    const ramparts = room.find(FIND_STRUCTURES, {
+        filter: (structure) => structure.structureType === STRUCTURE_RAMPART
+    });
+    
+    // Count status for walls
+    let wallsBelowTarget = 0;
+    let wallsAtTarget = 0;
+    let wallsCritical = 0;
+    
+    walls.forEach(wall => {
+        if (wall.hits < wallTargetHits) {
+            wallsBelowTarget++;
+            if (wall.hits < wallTargetHits * 0.2) {
+                wallsCritical++;
+            }
+        } else {
+            wallsAtTarget++;
+        }
+    });
+    
+    // Count status for ramparts
+    let rampartsBelowTarget = 0;
+    let rampartsAtTarget = 0;
+    let rampartsCritical = 0;
+    
+    ramparts.forEach(rampart => {
+        if (rampart.hits < rampartTargetHits) {
+            rampartsBelowTarget++;
+            if (rampart.hits < rampartTargetHits * 0.2) {
+                rampartsCritical++;
+            }
+        } else {
+            rampartsAtTarget++;
+        }
+    });
+    
+    // Log defense status every 50 ticks for monitoring
+    if (Game.time % 50 === 0 && (walls.length > 0 || ramparts.length > 0)) {
+        console.log(`🛡️ Walls (RCL ${rcl}, target: ${wallTargetHits.toLocaleString()}): ${wallsAtTarget} at target, ${wallsBelowTarget} need repair (${wallsCritical} critical)`);
+        console.log(`🚪 Rampart gates (target: ${rampartTargetHits.toLocaleString()}): ${rampartsAtTarget} at target, ${rampartsBelowTarget} need repair (${rampartsCritical} critical)`);
+    }
+}
+
+function cleanupSharedConstructionTarget(room) {
+    if (room.memory.sharedConstructionTarget) {
+        const target = Game.getObjectById(room.memory.sharedConstructionTarget);
+        if (!target) {
+            // Target no longer exists, clear it
+            delete room.memory.sharedConstructionTarget;
+        }
+    }
+}
+
+function getSharedConstructionTarget(room) {
+    // Check if current shared target still exists and is valid
+    if (room.memory.sharedConstructionTarget) {
+        const target = Game.getObjectById(room.memory.sharedConstructionTarget);
+        if (target) {
+            return target; // Current shared target is still valid
+        } else {
+            // Target completed or destroyed, clear it
+            delete room.memory.sharedConstructionTarget;
+        }
+    }
+    
+    // Find a new shared construction target
+    const constructionSites = room.find(FIND_CONSTRUCTION_SITES);
+    if (constructionSites.length === 0) {
+        return null; // No construction sites available
+    }
+    
+    // Prioritize construction sites by importance
+    const priorityOrder = [
+        STRUCTURE_SPAWN,
+        STRUCTURE_EXTENSION,
+        STRUCTURE_STORAGE,
+        STRUCTURE_TOWER,
+        STRUCTURE_CONTAINER,
+        STRUCTURE_WALL,
+        STRUCTURE_RAMPART,
+        STRUCTURE_ROAD,
+        STRUCTURE_LINK,
+        STRUCTURE_TERMINAL
+    ];
+    
+    // Find highest priority construction site
+    let selectedTarget = null;
+    for (const structureType of priorityOrder) {
+        const sitesOfType = constructionSites.filter(site => site.structureType === structureType);
+        if (sitesOfType.length > 0) {
+            // For same priority, pick the one closest to spawn
+            const spawn = room.find(FIND_MY_SPAWNS)[0];
+            selectedTarget = spawn ? spawn.pos.findClosestByPath(sitesOfType) : sitesOfType[0];
+            break;
+        }
+    }
+    
+    // If no prioritized target found, take any construction site
+    if (!selectedTarget) {
+        const spawn = room.find(FIND_MY_SPAWNS)[0];
+        selectedTarget = spawn ? spawn.pos.findClosestByPath(constructionSites) : constructionSites[0];
+    }
+    
+    // Set as shared target
+    if (selectedTarget) {
+        room.memory.sharedConstructionTarget = selectedTarget.id;
+        console.log(`🏗️ New shared construction target: ${selectedTarget.structureType} at (${selectedTarget.pos.x},${selectedTarget.pos.y})`);
+    }
+    
+    return selectedTarget;
+}
+
+function getDefensesNeedingRepair(room) {
+    const rcl = room.controller.level;
+    const wallTargetHits = WALL_TARGET_HITS[rcl] || WALL_TARGET_HITS[1];
+    const rampartTargetHits = RAMPART_TARGET_HITS[rcl] || RAMPART_TARGET_HITS[1];
+    
+    // Find walls needing repair
+    const walls = room.find(FIND_STRUCTURES, {
+        filter: (structure) => {
+            return structure.structureType === STRUCTURE_WALL && 
+                   structure.hits < wallTargetHits;
+        }
+    });
+    
+    // Find ramparts needing repair
+    const ramparts = room.find(FIND_STRUCTURES, {
+        filter: (structure) => {
+            return structure.structureType === STRUCTURE_RAMPART && 
+                   structure.hits < rampartTargetHits;
+        }
+    });
+    
+    // Combine and sort by most urgent (lowest hit % compared to target)
+    const allDefenses = [
+        ...walls.map(wall => ({ structure: wall, targetHits: wallTargetHits, type: 'wall' })),
+        ...ramparts.map(rampart => ({ structure: rampart, targetHits: rampartTargetHits, type: 'rampart' }))
+    ];
+    
+    return allDefenses.sort((a, b) => {
+        const aPercent = a.structure.hits / a.targetHits;
+        const bPercent = b.structure.hits / b.targetHits;
+        return aPercent - bPercent;
+    }).map(item => item.structure);
+}
+
 function runBuilder(creep) {
-    // If creep has energy, build things
+    // If creep has energy, prioritize repairs then building
     if (creep.store[RESOURCE_ENERGY] > 0) {
         let target = null;
+        let isRepairTask = false;
         
-        // Check if we have an assigned construction site
+        // Check if we have an assigned target (repair or build)
         if (creep.memory.buildTarget) {
             target = Game.getObjectById(creep.memory.buildTarget);
-            // If the target no longer exists (completed or destroyed), clear assignment
+            isRepairTask = creep.memory.isRepairTask || false;
+            // If the target no longer exists, clear assignment
             if (!target) {
                 delete creep.memory.buildTarget;
+                delete creep.memory.isRepairTask;
             }
         }
         
-        // If no assigned target, find a new one
+        // If no assigned target, find a new one - prioritize defense repairs
         if (!target) {
-            const targets = creep.room.find(FIND_CONSTRUCTION_SITES);
-            if (targets.length > 0) {
-                target = creep.pos.findClosestByPath(targets);
+            // First priority: Walls and ramparts needing repair
+            const defensesNeedingRepair = getDefensesNeedingRepair(creep.room);
+            if (defensesNeedingRepair.length > 0) {
+                target = creep.pos.findClosestByPath(defensesNeedingRepair);
                 if (target) {
                     creep.memory.buildTarget = target.id;
+                    creep.memory.isRepairTask = true;
+                    isRepairTask = true;
+                }
+            }
+            
+            // Second priority: Shared construction site (all builders work together)
+            if (!target) {
+                target = getSharedConstructionTarget(creep.room);
+                if (target) {
+                    creep.memory.buildTarget = target.id;
+                    creep.memory.isRepairTask = false;
+                    isRepairTask = false;
                 }
             }
         }
         
         if (target) {
-            const buildResult = creep.build(target);
-            if (buildResult === ERR_NOT_IN_RANGE) {
+            let actionResult;
+            if (isRepairTask) {
+                actionResult = creep.repair(target);
+            } else {
+                actionResult = creep.build(target);
+            }
+            
+            if (actionResult === ERR_NOT_IN_RANGE) {
                 creep.moveTo(target, { visualizePathStyle: { stroke: '#ffffff' } });
-            } else if (buildResult === OK) {
-                // Building successfully, no need to log every tick
-            } else if (buildResult !== OK) {
-                console.log(`Build error: ${buildResult} for creep ${creep.name}`);
-                // Clear assignment on error to try a different site
+            } else if (actionResult === OK) {
+                // Check if repair target is now at target hits
+                if (isRepairTask) {
+                    const rcl = creep.room.controller.level;
+                    let targetHits;
+                    if (target.structureType === STRUCTURE_WALL) {
+                        targetHits = WALL_TARGET_HITS[rcl] || WALL_TARGET_HITS[1];
+                    } else if (target.structureType === STRUCTURE_RAMPART) {
+                        targetHits = RAMPART_TARGET_HITS[rcl] || RAMPART_TARGET_HITS[1];
+                    }
+                    
+                    if (targetHits && target.hits >= targetHits) {
+                        // Defense structure is now at target level, clear assignment
+                        delete creep.memory.buildTarget;
+                        delete creep.memory.isRepairTask;
+                    }
+                }
+            } else if (actionResult !== OK) {
+                console.log(`${isRepairTask ? 'Repair' : 'Build'} error: ${actionResult} for creep ${creep.name}`);
+                // Clear assignment on error to try a different target
                 delete creep.memory.buildTarget;
+                delete creep.memory.isRepairTask;
+                
+                // If this was a construction site that failed, clear shared target
+                if (!isRepairTask && actionResult === ERR_INVALID_TARGET) {
+                    // Construction site was completed by another creep
+                    if (creep.room.memory.sharedConstructionTarget === target.id) {
+                        delete creep.room.memory.sharedConstructionTarget;
+                        console.log(`🏗️ Shared construction target completed, selecting new target`);
+                    }
+                }
             }
         } else {
             // No construction sites, help upgrade controller
@@ -1071,12 +2052,21 @@ function runBuilder(creep) {
             }
         }
     } else {
-        // Get energy from containers or storage only (spawn/extensions reserved for spawning)
+        // Get energy from source containers and storage only (exclude controller container)
+        const controller = creep.room.controller;
         const targets = creep.room.find(FIND_STRUCTURES, {
             filter: (structure) => {
-                return (structure.structureType === STRUCTURE_CONTAINER ||
-                        structure.structureType === STRUCTURE_STORAGE) &&
-                       structure.store[RESOURCE_ENERGY] > 0;
+                if (structure.structureType === STRUCTURE_STORAGE && structure.store[RESOURCE_ENERGY] > 0) {
+                    return true;
+                }
+                if (structure.structureType === STRUCTURE_CONTAINER && structure.store[RESOURCE_ENERGY] > 0) {
+                    // Exclude controller containers - only use source containers
+                    if (controller && structure.pos.getRangeTo(controller) <= 3) {
+                        return false; // This is a controller container, skip it
+                    }
+                    return true; // This is a source container, use it
+                }
+                return false;
             }
         });
         
