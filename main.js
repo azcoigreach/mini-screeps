@@ -1409,10 +1409,10 @@ function createMissingConstructionSites(room) {
     // Sort planned structures by priority, with extensions sorted by distance to spawn
     const spawn = room.find(FIND_MY_SPAWNS)[0];
     const sortedPlannedStructures = [...room.memory.plannedStructures].sort((a, b) => {
-        // Priority order for structure types
+        // Priority order for structure types - extensions first!
         const priorityOrder = [
-            STRUCTURE_SPAWN,
             STRUCTURE_EXTENSION,
+            STRUCTURE_SPAWN,
             STRUCTURE_STORAGE,
             STRUCTURE_TOWER,
             STRUCTURE_CONTAINER,
@@ -1448,6 +1448,19 @@ function createMissingConstructionSites(room) {
     let created = 0;
     let rampartCount = 0;
     let totalPlanned = 0;
+    let extensionsCreated = 0;
+    let roadsSkipped = 0;
+    
+    // Count existing important structures to determine if we should build roads yet
+    const existingExtensions = room.find(FIND_STRUCTURES, {
+        filter: s => s.structureType === STRUCTURE_EXTENSION
+    }).length;
+    const existingContainers = room.find(FIND_STRUCTURES, {
+        filter: s => s.structureType === STRUCTURE_CONTAINER
+    }).length;
+    
+    // Only build roads after we have some essential structures
+    const shouldBuildRoads = existingExtensions >= 5 && existingContainers >= 1;
     
     for (const planned of sortedPlannedStructures) {
         totalPlanned++;
@@ -1460,6 +1473,12 @@ function createMissingConstructionSites(room) {
             continue;
         }
         
+        // Skip roads until we have essential structures built
+        if (planned.type === STRUCTURE_ROAD && !shouldBuildRoads) {
+            roadsSkipped++;
+            continue;
+        }
+        
         const pos = new RoomPosition(planned.x, planned.y, room.name);
         const structures = pos.lookFor(LOOK_STRUCTURES);
         const constructionSites = pos.lookFor(LOOK_CONSTRUCTION_SITES);
@@ -1469,26 +1488,44 @@ function createMissingConstructionSites(room) {
         const hasConstructionSite = constructionSites.some(c => c.structureType === planned.type);
         
         if (!hasStructure && !hasConstructionSite) {
-            const result = room.createConstructionSite(pos.x, pos.y, planned.type);
-            if (result === OK) {
-                created++;
-                if (planned.type === STRUCTURE_EXTENSION && spawn) {
-                    const distance = spawn.pos.getRangeTo(pos.x, pos.y);
-                    console.log(`✅ Created extension construction site at (${pos.x},${pos.y}) - distance ${distance} from spawn`);
-                } else if (planned.type === STRUCTURE_RAMPART) {
-                    console.log(`✅ Created rampart construction site at (${pos.x},${pos.y})`);
+            // Prioritize extensions - create more extension sites if needed
+            if (planned.type === STRUCTURE_EXTENSION) {
+                const result = room.createConstructionSite(pos.x, pos.y, planned.type);
+                if (result === OK) {
+                    created++;
+                    extensionsCreated++;
+                    if (spawn) {
+                        const distance = spawn.pos.getRangeTo(pos.x, pos.y);
+                        console.log(`✅ PRIORITY: Created extension construction site at (${pos.x},${pos.y}) - distance ${distance} from spawn`);
+                    }
+                } else {
+                    console.log(`❌ Failed to create ${planned.type} at (${pos.x},${pos.y}): ${result}`);
                 }
             } else {
-                console.log(`❌ Failed to create ${planned.type} at (${pos.x},${pos.y}): ${result}`);
+                // For non-extensions, only create if we have room and haven't maxed out extension sites
+                const result = room.createConstructionSite(pos.x, pos.y, planned.type);
+                if (result === OK) {
+                    created++;
+                    if (planned.type === STRUCTURE_ROAD) {
+                        console.log(`✅ Created road construction site at (${pos.x},${pos.y}) - after ${existingExtensions} extensions built`);
+                    } else if (planned.type === STRUCTURE_RAMPART) {
+                        console.log(`✅ Created rampart construction site at (${pos.x},${pos.y})`);
+                    }
+                } else {
+                    console.log(`❌ Failed to create ${planned.type} at (${pos.x},${pos.y}): ${result}`);
+                }
             }
         }
         
-        // Don't break too early - let more structures be created
-        if (created >= 10) break; // Increased limit
+        // Limit total construction sites, but allow more extensions
+        if (created >= 10 && extensionsCreated >= 5) break;
     }
     
     if (created > 0) {
-        console.log(`🏗️ Created ${created} construction sites (${rampartCount} ramparts waiting for RCL 2+)`);
+        console.log(`🏗️ Created ${created} construction sites (${extensionsCreated} extensions prioritized, ${rampartCount} ramparts waiting for RCL 2+)`);
+    }
+    if (roadsSkipped > 0) {
+        console.log(`🛣️ Skipped ${roadsSkipped} roads - building extensions first (need ${5 - existingExtensions} more extensions and ${1 - existingContainers} more containers)`);
     }
     console.log(`📊 Total planned structures: ${totalPlanned}, RCL ${rcl} allows: ${allowedStructures.join(', ')}`);
 }
@@ -2178,10 +2215,31 @@ function getSharedConstructionTarget(room) {
         return null; // No construction sites available
     }
     
-    // Prioritize construction sites by importance
+    // Check if we should build roads yet (same logic as createMissingConstructionSites)
+    const existingExtensions = room.find(FIND_STRUCTURES, {
+        filter: s => s.structureType === STRUCTURE_EXTENSION
+    }).length;
+    const existingContainers = room.find(FIND_STRUCTURES, {
+        filter: s => s.structureType === STRUCTURE_CONTAINER
+    }).length;
+    const shouldBuildRoads = existingExtensions >= 5 && existingContainers >= 1;
+    
+    // Filter out roads if we shouldn't build them yet
+    const filteredConstructionSites = shouldBuildRoads ? 
+        constructionSites : 
+        constructionSites.filter(site => site.structureType !== STRUCTURE_ROAD);
+    
+    if (filteredConstructionSites.length === 0) {
+        if (!shouldBuildRoads) {
+            console.log(`🛣️ No non-road construction sites available. Need ${5 - existingExtensions} more extensions and ${1 - existingContainers} more containers before building roads.`);
+        }
+        return null;
+    }
+    
+    // Prioritize construction sites by importance - extensions first!
     const priorityOrder = [
-        STRUCTURE_SPAWN,
         STRUCTURE_EXTENSION,
+        STRUCTURE_SPAWN,
         STRUCTURE_STORAGE,
         STRUCTURE_TOWER,
         STRUCTURE_CONTAINER,
@@ -2195,7 +2253,7 @@ function getSharedConstructionTarget(room) {
     // Find highest priority construction site
     let selectedTarget = null;
     for (const structureType of priorityOrder) {
-        const sitesOfType = constructionSites.filter(site => site.structureType === structureType);
+        const sitesOfType = filteredConstructionSites.filter(site => site.structureType === structureType);
         if (sitesOfType.length > 0) {
             const spawn = room.find(FIND_MY_SPAWNS)[0];
             
@@ -2208,24 +2266,32 @@ function getSharedConstructionTarget(room) {
                 });
                 selectedTarget = sitesOfType[0];
                 console.log(`🏗️ Prioritizing extension at (${selectedTarget.pos.x},${selectedTarget.pos.y}) - distance ${spawn.pos.getRangeTo(selectedTarget.pos)} from spawn`);
-            } else {
-                // For other structures, pick the one closest to spawn by path
+            } else if (structureType === STRUCTURE_ROAD && shouldBuildRoads) {
+                // Only select roads if we should be building them
+                selectedTarget = spawn ? spawn.pos.findClosestByPath(sitesOfType) : sitesOfType[0];
+                console.log(`🛣️ Now building roads - selected road at (${selectedTarget.pos.x},${selectedTarget.pos.y})`);
+            } else if (structureType !== STRUCTURE_ROAD) {
+                // For other non-road structures, pick the one closest to spawn by path
                 selectedTarget = spawn ? spawn.pos.findClosestByPath(sitesOfType) : sitesOfType[0];
             }
             break;
         }
     }
     
-    // If no prioritized target found, take any construction site
+    // If no prioritized target found, take any construction site (excluding roads if we shouldn't build them)
     if (!selectedTarget) {
         const spawn = room.find(FIND_MY_SPAWNS)[0];
-        selectedTarget = spawn ? spawn.pos.findClosestByPath(constructionSites) : constructionSites[0];
+        selectedTarget = spawn ? spawn.pos.findClosestByPath(filteredConstructionSites) : filteredConstructionSites[0];
     }
     
     // Set as shared target
     if (selectedTarget) {
         room.memory.sharedConstructionTarget = selectedTarget.id;
-        console.log(`🏗️ New shared construction target: ${selectedTarget.structureType} at (${selectedTarget.pos.x},${selectedTarget.pos.y})`);
+        if (selectedTarget.structureType === STRUCTURE_EXTENSION) {
+            console.log(`🏗️ New shared construction target: PRIORITY EXTENSION at (${selectedTarget.pos.x},${selectedTarget.pos.y})`);
+        } else {
+            console.log(`🏗️ New shared construction target: ${selectedTarget.structureType} at (${selectedTarget.pos.x},${selectedTarget.pos.y})`);
+        }
     }
     
     return selectedTarget;
