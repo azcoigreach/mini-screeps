@@ -1467,11 +1467,11 @@ function createMissingConstructionSites(room) {
         
         const pos = new RoomPosition(planned.x, planned.y, room.name);
         const structures = pos.lookFor(LOOK_STRUCTURES);
-        const constructionSites = pos.lookFor(LOOK_CONSTRUCTION_SITES);
+        const positionConstructionSites = pos.lookFor(LOOK_CONSTRUCTION_SITES);
         
         // Check if structure or construction site already exists
         const hasStructure = structures.some(s => s.structureType === planned.type);
-        const hasConstructionSite = constructionSites.some(c => c.structureType === planned.type);
+        const hasConstructionSite = positionConstructionSites.some(c => c.structureType === planned.type);
         
         if (!hasStructure && !hasConstructionSite) {
             // Prioritize extensions - create more extension sites if needed
