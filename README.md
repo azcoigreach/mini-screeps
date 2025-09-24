@@ -3,6 +3,8 @@
 
 A minimal, self-contained Screeps bot focused on **Pixel earning** with advanced throughput optimization for maximum room efficiency. This bot operates autonomously in a single room with no expansion or remote operations, implementing mathematical throughput calculations for optimal energy flow.
 
+**Version**: 1.0.0 | **File**: `main.js` (~2600 lines) | **Dependencies**: None
+
 ## 🎯 **Primary Goals**
 
 1. **Pixel Generation**: Earn Pixels by using 10,000 CPU per tick (1 Pixel per 10,000 CPU)
@@ -33,6 +35,11 @@ A minimal, self-contained Screeps bot focused on **Pixel earning** with advanced
 - **Builder Allocation**: 10 energy/tick when construction needed
 - **Upgrader Allocation**: Remaining energy (minimum 4 energy/tick)
 - **Dynamic Balancing**: Adjusts based on room construction needs
+
+### **Distance Transform Optimization**
+- **Algorithm**: Multi-pass distance transform for optimal structure placement
+- **Purpose**: Finds positions with good wall distance and controller/spawn access
+- **Benefits**: Minimizes creep travel distances and maximizes base efficiency
 
 
 ## 🏗️ **Architecture**
@@ -112,16 +119,39 @@ Spawn/Extensions → Upgraders/Builders → Controller/Construction
 - **Source Containers**: Adjacent to each source for miner deposits
 - **Controller Container**: 2-3 tiles from controller for upgrader access
 - **Road Planning**: Automatic road placement for improved travel efficiency
+- **Wall & Rampart Gates**: Minimum-cut algorithm places defensive barriers with controlled entrances
+- **Defense Hit Points**: RCL-scaled maintenance targets (RCL 1: 1K hits → RCL 8: 10M hits for walls)
 
-- **Smart Placement**: Only on plain/swamp terrain, avoiding walls
+### **Construction Priority System**
+1. **Extensions** (closest to spawn prioritized)
+2. Core structures (spawn, storage, towers)
+3. **Roads** (only after 5+ extensions and 1+ container built)
+4. All builders work on shared target via `room.memory.sharedConstructionTarget`
 
-## ⚡ **Pixel Earning Strategy**
+## 🛡️ **Defense System**
+
+### **Automated Wall & Rampart Management**
+- **RCL-Scaled Hit Points**: Walls and ramparts maintained to level-appropriate targets
+- **Priority Repair**: Builders prioritize defense structures below target HP
+- **Gate Placement**: Rampart gates placed at room entrances for controlled access
+
+### **Tower Defense**
+- **Hostile Detection**: Automatic activation when enemies detected
+- **Healing Priority**: Injured creeps healed before attacking
+- **Repair Mode**: Damaged structures repaired when no threats present
+- **Coordinated Attack**: Multiple towers target closest threats
 
 ### **CPU Management**
 - **Monitor**: CPU bucket levels continuously
 - **Threshold**: Generate Pixel when bucket ≥ 10,000
 - **Method**: `Game.cpu.generatePixel()` (official Screeps API)
 - **Logging**: Track CPU usage, bucket levels, and Pixel count
+
+### **Advanced Pixel Tracking**
+- **Generation History**: Tracks last 10 pixel generations for rate calculation
+- **Bucket Fill Rate**: Monitors CPU bucket growth over time
+- **Time Estimation**: Calculates ticks until next pixel generation
+- **Performance Stats**: Pixels per tick, ticks per pixel metrics
 
 ### **Efficiency Cycle**
 1. **Build Phase**: Normal operations while bucket fills
@@ -184,6 +214,12 @@ Spawn/Extensions → Upgraders/Builders → Controller/Construction
 - No manual configuration
 
 ## 🔧 **Technical Details**
+
+### **Advanced Algorithms**
+- **Distance Transform**: Multi-pass algorithm for optimal base layout
+- **Pathfinding Optimization**: Cost matrices avoid walls and prioritize roads
+- **Source Distribution**: Balanced energy gathering across all sources
+- **Construction Prioritization**: Extensions before roads, closest structures first
 
 ### **Memory Management**
 - Automatic cleanup of dead creep memory
