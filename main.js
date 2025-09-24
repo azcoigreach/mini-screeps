@@ -82,18 +82,18 @@ module.exports.loop = function () {
         room.memory.basePlanned = true;
     }
 
-    // Create construction sites more frequently
-    if (Game.time % 5 === 0) {
+    // Create construction sites less frequently - only every 20 ticks instead of 5
+    if (Game.time % 20 === 0) {
         createMissingConstructionSites(room);
     }
 
-    // Manage wall and rampart hit points
-    if (Game.time % 10 === 0) {
+    // Manage wall and rampart hit points less frequently
+    if (Game.time % 50 === 0) {
         manageDefenseHitPoints(room);
     }
 
-    // Clean up shared construction target if needed
-    if (Game.time % 5 === 0) {
+    // Clean up shared construction target less frequently
+    if (Game.time % 20 === 0) {
         cleanupSharedConstructionTarget(room);
     }
 
@@ -110,6 +110,9 @@ module.exports.loop = function () {
         const creep = Game.creeps[name];
         runCreep(creep);
     }
+
+    // Run tower defense
+    runTowers(room);
 
     // Visualize base plan every tick for debugging (toggle with VISUALIZE_BASE constant)
     if (room.memory.basePlanned && VISUALIZE_BASE) {
@@ -174,10 +177,7 @@ function planBase(room) {
     
     // Use distance transform to optimally place tower clusters near spawn
     placeDefenseStampsOptimal(room, spawn, distanceTransform);
-    
-    // Place economy stamps (storage, terminal, links)
-    // placeEconomyStamps(room, anchor);
-    
+        
     // Connect everything with roads
     planRoadNetwork(room, anchor, sources, controller);
     
@@ -333,34 +333,7 @@ function placeCoreStamp(room, spawn) {
 
         // 2 Towers spread out in the expanded right area
         [4, -1, STRUCTURE_TOWER],
-        [4, 1, STRUCTURE_TOWER],
-        
-        // === ROADS PLACED ONLY WHERE NO OTHER STRUCTURES EXIST ===
-        // Complete road perimeter (10x5 rectangle) - excluding positions with buildings
-        
-        // Top edge (y = -2) - expanded by 2 tiles
-        [-5, -2, STRUCTURE_ROAD], [-4, -2, STRUCTURE_ROAD], [-3, -2, STRUCTURE_ROAD], [-2, -2, STRUCTURE_ROAD], [-1, -2, STRUCTURE_ROAD], [0, -2, STRUCTURE_ROAD], 
-        [1, -2, STRUCTURE_ROAD], [2, -2, STRUCTURE_ROAD], [3, -2, STRUCTURE_ROAD], [4, -2, STRUCTURE_ROAD],
-        
-        // Second row (y = -1) - roads except where towers are
-        [-5, -1, STRUCTURE_ROAD], [-4, -1, STRUCTURE_ROAD], [-2, -1, STRUCTURE_ROAD], [-1, -1, STRUCTURE_ROAD], [0, -1, STRUCTURE_ROAD], 
-        [1, -1, STRUCTURE_ROAD], [2, -1, STRUCTURE_ROAD], [3, -1, STRUCTURE_ROAD], // Skip [4,-1] - tower there
-        
-        // Third row (y = 0) - roads except where extensions/storage/terminal/link are  
-        [-5, 0, STRUCTURE_ROAD], [-1, 0, STRUCTURE_ROAD], [0, 0, STRUCTURE_ROAD], [1, 0, STRUCTURE_ROAD], 
-        // Skip [-4,0], [-3,0], [-2,0] - extensions there
-        // Skip [2,0] - storage there
-        // Skip [3,0] - terminal there
-        // Skip [4,0] - link there
-        
-        // Fourth row (y = 1) - roads except where extensions and towers are
-        [-5, 1, STRUCTURE_ROAD], [-4, 1, STRUCTURE_ROAD], [-2, 1, STRUCTURE_ROAD], [-1, 1, STRUCTURE_ROAD], [0, 1, STRUCTURE_ROAD], 
-        [1, 1, STRUCTURE_ROAD], [2, 1, STRUCTURE_ROAD], [3, 1, STRUCTURE_ROAD], // Skip [4,1] - tower there
-        // Skip [-3,1] - extension there
-        
-        // Bottom edge (y = 2) - expanded by 2 tiles
-        [-5, 2, STRUCTURE_ROAD], [-4, 2, STRUCTURE_ROAD], [-3, 2, STRUCTURE_ROAD], [-2, 2, STRUCTURE_ROAD], [-1, 2, STRUCTURE_ROAD], [0, 2, STRUCTURE_ROAD], 
-        [1, 2, STRUCTURE_ROAD], [2, 2, STRUCTURE_ROAD], [3, 2, STRUCTURE_ROAD], [4, 2, STRUCTURE_ROAD]
+        [4, 1, STRUCTURE_TOWER]
     ];
     
     addStampToPlannedStructures(room, anchor, coreStamp);
@@ -376,19 +349,7 @@ function placeExtensionFieldsOptimal(room, spawn, distanceTransform) {
         [-1, 0, STRUCTURE_EXTENSION], // Left
         [0, 0, STRUCTURE_EXTENSION],  // Center
         [1, 0, STRUCTURE_EXTENSION],  // Right
-        [0, 1, STRUCTURE_EXTENSION],  // Bottom
-        
-        // Roads only where no extensions exist (5x5 perimeter minus extension positions)
-        [-2, -2, STRUCTURE_ROAD], [-1, -2, STRUCTURE_ROAD], [1, -2, STRUCTURE_ROAD], [2, -2, STRUCTURE_ROAD], // Top row (skip center)
-        [-2, -1, STRUCTURE_ROAD], [2, -1, STRUCTURE_ROAD], // Second row sides only
-        [-2, 0, STRUCTURE_ROAD], [2, 0, STRUCTURE_ROAD],   // Third row sides only  
-        [-2, 1, STRUCTURE_ROAD], [2, 1, STRUCTURE_ROAD],   // Fourth row sides only
-        [-2, 2, STRUCTURE_ROAD], [-1, 2, STRUCTURE_ROAD], [0, 2, STRUCTURE_ROAD], [1, 2, STRUCTURE_ROAD], [2, 2, STRUCTURE_ROAD], // Bottom row
-        
-        // Fill in road positions that don't conflict with extensions
-        [0, -2, STRUCTURE_ROAD],  // Top center
-        [-1, -1, STRUCTURE_ROAD], [1, -1, STRUCTURE_ROAD], // Second row (skip extension)
-        [-1, 1, STRUCTURE_ROAD], [1, 1, STRUCTURE_ROAD]    // Fourth row (skip extension)
+        [0, 1, STRUCTURE_EXTENSION]   // Bottom
     ];
     
     const spawnPos = spawn.pos;
@@ -519,13 +480,7 @@ function placeDefenseStampsOptimal(room, spawn, distanceTransform) {
     const turretClusterStamp = [
         // 4 Turrets first to prevent roads underneath
         [0, 0, STRUCTURE_TOWER], [1, 0, STRUCTURE_TOWER],
-        [0, 1, STRUCTURE_TOWER], [1, 1, STRUCTURE_TOWER],
-        
-        // Border roads only where no turrets exist
-        [-1, -1, STRUCTURE_ROAD], [0, -1, STRUCTURE_ROAD], [1, -1, STRUCTURE_ROAD], [2, -1, STRUCTURE_ROAD], // Top row
-        [-1, 0, STRUCTURE_ROAD], [2, 0, STRUCTURE_ROAD],   // Middle rows sides only (turrets at [0,0] and [1,0])
-        [-1, 1, STRUCTURE_ROAD], [2, 1, STRUCTURE_ROAD],   // Middle rows sides only (turrets at [0,1] and [1,1])
-        [-1, 2, STRUCTURE_ROAD], [0, 2, STRUCTURE_ROAD], [1, 2, STRUCTURE_ROAD], [2, 2, STRUCTURE_ROAD]  // Bottom row
+        [0, 1, STRUCTURE_TOWER], [1, 1, STRUCTURE_TOWER]
     ];
     
     const spawnPos = spawn.pos;
@@ -922,19 +877,6 @@ function calculateOpenRoomArea(terrain) {
     return openArea;
 }
 
-// Economy stamps: Storage, terminal, links
-function placeEconomyStamps(room, anchor) {
-    const economyStamp = [
-        [0, 0, STRUCTURE_TERMINAL],
-        [2, 0, STRUCTURE_LINK]
-    ];
-    
-    const economyPos = { x: anchor.x + 4, y: anchor.y };
-    if (isValidStampPosition(room, economyPos, economyStamp)) {
-        addStampToPlannedStructures(room, economyPos, economyStamp);
-    }
-}
-
 // Helper function: Check if stamp can be placed at position
 function isValidStampPosition(room, anchor, stamp) {
     const terrain = new Room.Terrain(room.name);
@@ -1083,63 +1025,20 @@ function createRoadPlanningCostMatrix(room) {
     return costs;
 }
 
-// Smart road network planning - comprehensive connectivity
+// Simple road network planning - only essential paths from spawn
 function planRoadNetwork(room, anchor, sources, controller) {
-    console.log('Planning comprehensive road network...');
-    
-    // Create cost matrix to avoid walls and expensive structures
+    console.log('Planning minimal road network...');
+
+    // Create cost matrix for pathfinding that avoids walls and expensive structures
     const costMatrix = createRoadPlanningCostMatrix(room);
-    
+
     // Key positions for road planning
-    const corePos = new RoomPosition(anchor.x, anchor.y, room.name);
-    const controllerPos = controller.pos;
     const spawn = room.find(FIND_MY_SPAWNS)[0];
     const spawnPos = spawn.pos;
-    
-    // Find placed extension fields and tower clusters from planned structures
-    const extensionFields = [];
-    const towerClusters = [];
-    
-    // Group planned structures by type and location
-    const structureGroups = {};
-    room.memory.plannedStructures.forEach(planned => {
-        if (planned.type === STRUCTURE_EXTENSION) {
-            const key = `${Math.floor(planned.x / 5)}_${Math.floor(planned.y / 5)}`;
-            if (!structureGroups[key]) {
-                structureGroups[key] = { extensions: [], x: planned.x, y: planned.y };
-            }
-            structureGroups[key].extensions.push(planned);
-        } else if (planned.type === STRUCTURE_TOWER) {
-            const key = `tower_${Math.floor(planned.x / 5)}_${Math.floor(planned.y / 5)}`;
-            if (!structureGroups[key]) {
-                structureGroups[key] = { towers: [], x: planned.x, y: planned.y };
-            }
-            structureGroups[key].towers = (structureGroups[key].towers || []);
-            structureGroups[key].towers.push(planned);
-        }
-    });
-    
-    // Create extension field centers
-    Object.values(structureGroups).forEach((group, index) => {
-        if (group.extensions && group.extensions.length >= 3) {
-            extensionFields.push({
-                x: group.x,
-                y: group.y,
-                name: `Ext Field ${index + 1}`
-            });
-        }
-        if (group.towers && group.towers.length >= 3) {
-            towerClusters.push({
-                x: group.x,
-                y: group.y,
-                name: `Tower Cluster ${index + 1}`
-            });
-        }
-    });
-    
-    console.log(`Core at (${anchor.x},${anchor.y}), planning roads to ${sources.length} sources, ${extensionFields.length} extension fields, ${towerClusters.length} tower clusters`);
-    
-    // 1. Connect spawn to all sources
+
+    console.log(`Core at (${anchor.x},${anchor.y}), planning roads to ${sources.length} sources and controller`);
+
+    // 1. Connect spawn to all sources (single-tile-wide paths)
     sources.forEach((source, index) => {
         const path = PathFinder.search(spawnPos, { pos: source.pos, range: 2 }, {
             roomCallback: () => costMatrix,
@@ -1147,52 +1046,15 @@ function planRoadNetwork(room, anchor, sources, controller) {
         }).path;
         addPathAsRoads(room, path, `Spawn → Source ${index + 1}`);
     });
-    
-    // 2. Connect spawn to controller
-    const controllerPath = PathFinder.search(spawnPos, { pos: controllerPos, range: 3 }, {
+
+    // 2. Connect spawn to controller (single-tile-wide path)
+    const controllerPath = PathFinder.search(spawnPos, { pos: controller.pos, range: 3 }, {
         roomCallback: () => costMatrix,
         maxRooms: 1
     }).path;
     addPathAsRoads(room, controllerPath, 'Spawn → Controller');
-    
-    // 3. Connect spawn to each extension field
-    extensionFields.forEach(field => {
-        const fieldPos = new RoomPosition(field.x, field.y, room.name);
-        const path = PathFinder.search(spawnPos, { pos: fieldPos, range: 2 }, {
-            roomCallback: () => costMatrix,
-            maxRooms: 1
-        }).path;
-        addPathAsRoads(room, path, `Spawn → ${field.name}`);
-    });
-    
-    // 4. Connect spawn to tower clusters
-    towerClusters.forEach(cluster => {
-        const clusterPos = new RoomPosition(cluster.x, cluster.y, room.name);
-        const path = PathFinder.search(spawnPos, { pos: clusterPos, range: 2 }, {
-            roomCallback: () => costMatrix,
-            maxRooms: 1
-        }).path;
-        addPathAsRoads(room, path, `Spawn → ${cluster.name}`);
-    });
-    
-    // 5. Connect extension fields to each other for redundancy
-    for (let i = 0; i < extensionFields.length; i++) {
-        for (let j = i + 1; j < extensionFields.length; j++) {
-            const field1 = extensionFields[i];
-            const field2 = extensionFields[j];
-            const distance = Math.max(Math.abs(field1.x - field2.x), Math.abs(field1.y - field2.y));
-            
-            if (distance <= 15) { // Connect if reasonably close
-                const pos1 = new RoomPosition(field1.x, field1.y, room.name);
-                const pos2 = new RoomPosition(field2.x, field2.y, room.name);
-                const path = PathFinder.search(pos1, { pos: pos2, range: 2 }, {
-                    roomCallback: () => costMatrix,
-                    maxRooms: 1
-                }).path;
-                addPathAsRoads(room, path, `${field1.name} → ${field2.name}`);
-            }
-        }
-    }
+
+    console.log('Minimal road network planning complete');
 }
 
 // Enhanced helper function: Add path positions as road structures with logging
@@ -1498,12 +1360,30 @@ function createMissingConstructionSites(room) {
     const rcl = room.controller.level;
     console.log(`🏗️ Creating construction sites for RCL ${rcl}...`);
     
-    // Limit construction sites to avoid spam
+    // Limit construction sites to avoid spam - reduce limit when building roads
     const existingConstructionSites = room.find(FIND_CONSTRUCTION_SITES).length;
-    if (existingConstructionSites >= 15) return; // Allow more construction sites
+    const roadSites = room.find(FIND_CONSTRUCTION_SITES, {
+        filter: s => s.structureType === STRUCTURE_ROAD
+    }).length;
+    
+    // If we're building mostly roads, be more conservative with construction sites
+    const maxSites = roadSites > existingConstructionSites * 0.8 ? 8 : 15;
+    if (existingConstructionSites >= maxSites) return;
     
     // Filter structures by current RCL to avoid error spam
     const allowedStructures = getAllowedStructuresByRCL(rcl);
+    
+    // Count existing structures by type
+    const existingStructures = {};
+    room.find(FIND_STRUCTURES).forEach(structure => {
+        existingStructures[structure.structureType] = (existingStructures[structure.structureType] || 0) + 1;
+    });
+    
+    // Count construction sites by type
+    const constructionSites = {};
+    room.find(FIND_CONSTRUCTION_SITES).forEach(site => {
+        constructionSites[site.structureType] = (constructionSites[site.structureType] || 0) + 1;
+    });
     
     // Sort planned structures by priority, with extensions sorted by distance to spawn
     const spawn = room.find(FIND_MY_SPAWNS)[0];
@@ -1572,6 +1452,13 @@ function createMissingConstructionSites(room) {
             continue;
         }
         
+        // Check if we're already at the limit for this structure type
+        const currentCount = (existingStructures[planned.type] || 0) + (constructionSites[planned.type] || 0);
+        const maxAllowed = getMaxStructuresByRCL(rcl, planned.type);
+        if (currentCount >= maxAllowed) {
+            continue; // Already at limit, skip this structure
+        }
+        
         // Skip roads until we have essential structures built
         if (planned.type === STRUCTURE_ROAD && !shouldBuildRoads) {
             roadsSkipped++;
@@ -1626,7 +1513,37 @@ function createMissingConstructionSites(room) {
     if (roadsSkipped > 0) {
         console.log(`🛣️ Skipped ${roadsSkipped} roads - building extensions first (need ${5 - existingExtensions} more extensions and ${1 - existingContainers} more containers)`);
     }
+    
+    // Log structure limits for debugging
+    const extensionLimit = getMaxStructuresByRCL(rcl, STRUCTURE_EXTENSION);
+    const currentExtensions = existingStructures[STRUCTURE_EXTENSION] || 0;
+    const extensionSites = constructionSites[STRUCTURE_EXTENSION] || 0;
     console.log(`📊 Total planned structures: ${totalPlanned}, RCL ${rcl} allows: ${allowedStructures.join(', ')}`);
+    console.log(`🏗️ Extensions: ${currentExtensions} built + ${extensionSites} sites = ${currentExtensions + extensionSites}/${extensionLimit} allowed`);
+}
+
+// Helper function: Get maximum allowed structures by RCL and type
+function getMaxStructuresByRCL(rcl, structureType) {
+    const limits = {
+        [STRUCTURE_EXTENSION]: [0, 5, 10, 20, 30, 40, 50, 60, 60][rcl] || 0,
+        [STRUCTURE_ROAD]: 2500, // Effectively unlimited for our purposes
+        [STRUCTURE_CONTAINER]: [0, 5, 5, 5, 5, 5, 5, 5, 5][rcl] || 0,
+        [STRUCTURE_RAMPART]: [0, 0, 3000, 3000, 3000, 3000, 3000, 3000, 3000][rcl] || 0,
+        [STRUCTURE_WALL]: [0, 0, 3000, 3000, 3000, 3000, 3000, 3000, 3000][rcl] || 0,
+        [STRUCTURE_TOWER]: [0, 0, 0, 1, 1, 2, 2, 3, 6][rcl] || 0,
+        [STRUCTURE_STORAGE]: [0, 0, 0, 0, 1, 1, 1, 1, 1][rcl] || 0,
+        [STRUCTURE_LINK]: [0, 0, 0, 0, 0, 2, 3, 4, 6][rcl] || 0,
+        [STRUCTURE_EXTRACTOR]: [0, 0, 0, 0, 0, 0, 1, 1, 1][rcl] || 0,
+        [STRUCTURE_LAB]: [0, 0, 0, 0, 0, 0, 3, 6, 10][rcl] || 0,
+        [STRUCTURE_FACTORY]: [0, 0, 0, 0, 0, 0, 0, 1, 1][rcl] || 0,
+        [STRUCTURE_TERMINAL]: [0, 0, 0, 0, 0, 0, 0, 0, 1][rcl] || 0,
+        [STRUCTURE_OBSERVER]: [0, 0, 0, 0, 0, 0, 0, 0, 1][rcl] || 0,
+        [STRUCTURE_POWER_SPAWN]: [0, 0, 0, 0, 0, 0, 0, 0, 1][rcl] || 0,
+        [STRUCTURE_NUKER]: [0, 0, 0, 0, 0, 0, 0, 0, 1][rcl] || 0,
+        [STRUCTURE_SPAWN]: [1, 1, 1, 1, 1, 1, 1, 2, 3][rcl] || 0
+    };
+    
+    return limits[structureType] || 0;
 }
 
 // Helper function: Get allowed structures by RCL to prevent construction errors
@@ -1833,6 +1750,7 @@ function visualizeBasePlan(room) {
         { color: '#2287e6ff', text: 'Terminal' }
     ];
     
+    
     legendItems.forEach((item, index) => {
         const y = legendY + 1 + (index * 0.8);
         visual.circle(legendX - 1, y, {
@@ -1862,6 +1780,76 @@ function runCreep(creep) {
         case 'builder':
             runBuilder(creep);
             break;
+    }
+}
+
+function runTowers(room) {
+    // Find all towers in the room
+    const towers = room.find(FIND_MY_STRUCTURES, {
+        filter: (structure) => structure.structureType === STRUCTURE_TOWER
+    });
+
+    if (towers.length === 0) return; // No towers to operate
+
+    // Find hostile creeps in the room
+    const hostiles = room.find(FIND_HOSTILE_CREEPS);
+
+    if (hostiles.length > 0) {
+        console.log(`🚨 ${hostiles.length} hostile creep(s) detected! Activating tower defense.`);
+
+        // Sort hostiles by distance to spawn (prioritize threats near base)
+        const spawn = room.find(FIND_MY_SPAWNS)[0];
+        if (spawn) {
+            hostiles.sort((a, b) => spawn.pos.getRangeTo(a) - spawn.pos.getRangeTo(b));
+        }
+
+        // Command each tower to attack the closest hostile
+        towers.forEach((tower, index) => {
+            if (index < hostiles.length) {
+                const target = hostiles[index];
+                const attackResult = tower.attack(target);
+                if (attackResult === OK) {
+                    console.log(`🏹 Tower at (${tower.pos.x},${tower.pos.y}) attacking hostile ${target.name} (${target.owner.username})`);
+                } else {
+                    console.log(`❌ Tower attack failed: ${attackResult}`);
+                }
+            }
+        });
+    } else {
+        // No hostiles - check for injured creeps first
+        const injuredCreeps = room.find(FIND_MY_CREEPS, {
+            filter: (creep) => creep.hits < creep.hitsMax
+        });
+
+        if (injuredCreeps.length > 0) {
+            // Heal injured creeps
+            towers.forEach(tower => {
+                // Heal the most injured creep
+                const target = _.min(injuredCreeps, creep => creep.hits / creep.hitsMax);
+                const healResult = tower.heal(target);
+                if (healResult === OK) {
+                    console.log(`💚 Tower healing injured creep ${target.name}`);
+                }
+            });
+        } else {
+            // No hostiles or injured creeps - repair damaged structures
+            const structuresNeedingRepair = getStructuresNeedingRepair(room);
+
+            if (structuresNeedingRepair.length > 0) {
+                towers.forEach(tower => {
+                    // Find the most damaged structure within range
+                    const target = tower.pos.findClosestByRange(structuresNeedingRepair);
+                    if (target) {
+                        const repairResult = tower.repair(target);
+                        if (repairResult === OK) {
+                            console.log(`🔧 Tower repairing ${target.structureType} at (${target.pos.x},${target.pos.y}) - ${target.hits}/${target.hitsMax} hits`);
+                        } else {
+                            console.log(`❌ Tower repair failed: ${repairResult}`);
+                        }
+                    }
+                });
+            }
+        }
     }
 }
 
@@ -2139,7 +2127,7 @@ function getDistributedEnergyContainer(creep, targets) {
         
         // Find source with least assigned creeps across ALL energy-gathering roles
         const energyGatheringCreeps = _.filter(Game.creeps, c => 
-            (c.memory.role === 'hauler' || c.memory.role === 'builder' || c.memory.role === 'upgrader') && 
+            c.memory.role === 'hauler' && 
             c.name !== creep.name
         );
         const sourceAssignments = {};
@@ -2433,6 +2421,31 @@ function getDefensesNeedingRepair(room) {
     }).map(item => item.structure);
 }
 
+function getStructuresNeedingRepair(room) {
+    // Find all structures that are significantly damaged (below 80% of max hits)
+    const damagedStructures = room.find(FIND_STRUCTURES, {
+        filter: (structure) => {
+            // Skip walls and ramparts (handled separately by getDefensesNeedingRepair)
+            if (structure.structureType === STRUCTURE_WALL || structure.structureType === STRUCTURE_RAMPART) {
+                return false;
+            }
+            // Skip structures that are already at full health
+            if (structure.hits >= structure.hitsMax) {
+                return false;
+            }
+            // Only repair structures that are below 80% health
+            return structure.hits / structure.hitsMax < 0.8;
+        }
+    });
+
+    // Sort by most damaged first (lowest hit percentage)
+    return damagedStructures.sort((a, b) => {
+        const aPercent = a.hits / a.hitsMax;
+        const bPercent = b.hits / b.hitsMax;
+        return aPercent - bPercent;
+    });
+}
+
 function runBuilder(creep) {
     // If creep has energy, prioritize repairs then building
     if (creep.store[RESOURCE_ENERGY] > 0) {
@@ -2529,48 +2542,48 @@ function runBuilder(creep) {
             }
         }
     } else {
-        // Get energy from source containers and storage only (exclude controller container)
-        const controller = creep.room.controller;
-        const targets = creep.room.find(FIND_STRUCTURES, {
-            filter: (structure) => {
-                if (structure.structureType === STRUCTURE_STORAGE && structure.store[RESOURCE_ENERGY] > 0) {
-                    return true;
-                }
-                if (structure.structureType === STRUCTURE_CONTAINER && structure.store[RESOURCE_ENERGY] > 0) {
-                    // Exclude controller containers - only use source containers
-                    if (controller && structure.pos.getRangeTo(controller) <= 3) {
-                        return false; // This is a controller container, skip it
-                    }
-                    return true; // This is a source container, use it
-                }
-                return false;
+        // Prioritize picking up dropped energy over containers
+        const droppedEnergy = creep.room.find(FIND_DROPPED_RESOURCES, {
+            filter: (resource) => {
+                return resource.resourceType === RESOURCE_ENERGY && resource.amount >= 50;
             }
         });
         
-        if (targets.length > 0) {
-            // Use distributed container selection for balanced source usage
-            const target = getDistributedEnergyContainer(creep, targets);
-            
-            if (target) {
-                const withdrawResult = creep.withdraw(target, RESOURCE_ENERGY);
-                if (withdrawResult === ERR_NOT_IN_RANGE) {
-                    creep.moveTo(target, { visualizePathStyle: { stroke: '#ffaa00' } });
-                } else if (withdrawResult !== OK && withdrawResult !== ERR_NOT_ENOUGH_RESOURCES) {
-                    console.log(`Builder withdraw error: ${withdrawResult}`);
-                }
+        if (droppedEnergy.length > 0) {
+            const target = creep.pos.findClosestByPath(droppedEnergy);
+            if (creep.pickup(target) === ERR_NOT_IN_RANGE) {
+                creep.moveTo(target, { visualizePathStyle: { stroke: '#ffaa00' } });
             }
         } else {
-            // No energy sources available, look for dropped energy as fallback
-            const droppedEnergy = creep.room.find(FIND_DROPPED_RESOURCES, {
-                filter: (resource) => {
-                    return resource.resourceType === RESOURCE_ENERGY && resource.amount >= 50;
+            // Fallback to containers and storage (exclude controller container)
+            const controller = creep.room.controller;
+            const targets = creep.room.find(FIND_STRUCTURES, {
+                filter: (structure) => {
+                    if (structure.structureType === STRUCTURE_STORAGE && structure.store[RESOURCE_ENERGY] > 0) {
+                        return true;
+                    }
+                    if (structure.structureType === STRUCTURE_CONTAINER && structure.store[RESOURCE_ENERGY] > 0) {
+                        // Exclude controller containers - only use source containers
+                        if (controller && structure.pos.getRangeTo(controller) <= 3) {
+                            return false; // This is a controller container, skip it
+                        }
+                        return true; // This is a source container, use it
+                    }
+                    return false;
                 }
             });
             
-            if (droppedEnergy.length > 0) {
-                const target = creep.pos.findClosestByPath(droppedEnergy);
-                if (creep.pickup(target) === ERR_NOT_IN_RANGE) {
-                    creep.moveTo(target, { visualizePathStyle: { stroke: '#ffaa00' } });
+            if (targets.length > 0) {
+                // Use distributed container selection for balanced source usage
+                const target = getDistributedEnergyContainer(creep, targets);
+                
+                if (target) {
+                    const withdrawResult = creep.withdraw(target, RESOURCE_ENERGY);
+                    if (withdrawResult === ERR_NOT_IN_RANGE) {
+                        creep.moveTo(target, { visualizePathStyle: { stroke: '#ffaa00' } });
+                    } else if (withdrawResult !== OK && withdrawResult !== ERR_NOT_ENOUGH_RESOURCES) {
+                        console.log(`Builder withdraw error: ${withdrawResult}`);
+                    }
                 }
             } else {
                 // No energy sources available, wait near construction sites or controller
@@ -2596,20 +2609,112 @@ function manageCPUForPixels() {
     const cpuLimit = Game.cpu.limit;
     const cpuBucket = Game.cpu.bucket;
     
+    // Initialize pixel tracking memory if needed
+    if (!Memory.pixelTracking) {
+        Memory.pixelTracking = {
+            generationTimes: [],
+            lastPixelCount: 0,
+            lastRateCheck: Game.time,
+            bucketHistory: []
+        };
+    }
+    
+    // Track bucket levels for fill rate calculation
+    Memory.pixelTracking.bucketHistory.push({
+        tick: Game.time,
+        bucket: cpuBucket
+    });
+    
+    // Keep only last 100 bucket measurements
+    if (Memory.pixelTracking.bucketHistory.length > 100) {
+        Memory.pixelTracking.bucketHistory.shift();
+    }
+    
     // Check if generatePixel function is available (not available on local servers)
     if (typeof Game.cpu.generatePixel === 'function') {
-        // Direct Pixel generation strategy
+        const currentPixelCount = Game.resources['pixel'] || 0;
+        
+        // Aggressive Pixel generation strategy - generate as soon as possible
         if (cpuBucket >= 10000) {
             // We have enough CPU in bucket to generate a Pixel
             const result = Game.cpu.generatePixel();
             if (result === OK) {
+                // Track pixel generation
+                Memory.pixelTracking.generationTimes.push(Game.time);
+                // Keep only last 10 generations for rate calculation
+                if (Memory.pixelTracking.generationTimes.length > 10) {
+                    Memory.pixelTracking.generationTimes.shift();
+                }
+                
                 console.log(`🎯 PIXEL GENERATED! Bucket: ${cpuBucket} → ${Game.cpu.bucket}, Pixels: ${Game.resources['pixel'] || 0}`);
             } else {
                 console.log(`❌ Failed to generate Pixel: ${result}`);
             }
-        } else if (cpuBucket >= 8000) {
-            // Close to earning a Pixel, start preparing
-            console.log(`⚡ Preparing for Pixel: Bucket ${cpuBucket}/10000`);
+        } else if (cpuBucket >= 9000) {
+            // Getting close, log status more frequently
+            console.log(`⚡ Pixel ready soon: Bucket ${cpuBucket}/10000`);
+            
+            // Calculate estimated time to pixel if we have bucket history
+            const bucketHistory = Memory.pixelTracking.bucketHistory;
+            if (bucketHistory.length >= 5) {
+                const recentHistory = bucketHistory.slice(-5);
+                const timeSpan = recentHistory[recentHistory.length - 1].tick - recentHistory[0].tick;
+                const bucketIncrease = recentHistory[recentHistory.length - 1].bucket - recentHistory[0].bucket;
+                const fillRate = bucketIncrease / timeSpan;
+                
+                if (fillRate > 0) {
+                    const needed = 10000 - cpuBucket;
+                    const ticksNeeded = Math.ceil(needed / fillRate);
+                    console.log(`⏱️ Estimated ${ticksNeeded} ticks until next pixel (${fillRate.toFixed(1)} bucket/tick)`);
+                }
+            }
+        }
+        
+        // Calculate and log pixel generation rate every 500 ticks
+        if (Game.time % 500 === 0) {
+            const generations = Memory.pixelTracking.generationTimes;
+            const bucketHistory = Memory.pixelTracking.bucketHistory;
+            
+            // Calculate bucket fill rate
+            let bucketFillRate = 0;
+            if (bucketHistory.length >= 2) {
+                const recentHistory = bucketHistory.slice(-20); // Use last 20 measurements
+                const timeSpan = recentHistory[recentHistory.length - 1].tick - recentHistory[0].tick;
+                const bucketIncrease = recentHistory[recentHistory.length - 1].bucket - recentHistory[0].bucket;
+                bucketFillRate = bucketIncrease / timeSpan;
+            }
+            
+            // Estimate time to next pixel
+            let timeToNextPixel = 'Unknown';
+            if (bucketFillRate > 0) {
+                const neededBucket = 10000 - cpuBucket;
+                const ticksNeeded = Math.ceil(neededBucket / bucketFillRate);
+                timeToNextPixel = `${ticksNeeded} ticks`;
+            }
+            
+            if (generations.length >= 2) {
+                const timeSpan = generations[generations.length - 1] - generations[0];
+                const pixelsGenerated = generations.length;
+                const pixelsPerTick = (pixelsGenerated / timeSpan).toFixed(4);
+                const ticksPerPixel = (timeSpan / pixelsGenerated).toFixed(1);
+                
+                console.log(`📊 PIXEL STATS: ${pixelsPerTick} pixels/tick (${ticksPerPixel} ticks/pixel) | Bucket fill: ${bucketFillRate.toFixed(2)}/tick | Next pixel: ${timeToNextPixel}`);
+            } else if (generations.length === 1) {
+                const timeSinceLast = Game.time - generations[0];
+                console.log(`📊 PIXEL STATS: 1 pixel in last ${timeSinceLast} ticks (${(1/timeSinceLast).toFixed(4)} pixels/tick) | Bucket fill: ${bucketFillRate.toFixed(2)}/tick | Next pixel: ${timeToNextPixel}`);
+            } else {
+                console.log(`📊 PIXEL STATS: No pixels generated in last 500 ticks | Bucket fill: ${bucketFillRate.toFixed(2)}/tick | Next pixel: ${timeToNextPixel}`);
+            }
+            
+            // Reset tracking for fresh calculation
+            Memory.pixelTracking.generationTimes = [];
+            Memory.pixelTracking.bucketHistory = Memory.pixelTracking.bucketHistory.slice(-10); // Keep some history
+            Memory.pixelTracking.lastRateCheck = Game.time;
+        }
+        
+        // Clean up old tracking data if it gets too large
+        if (Memory.pixelTracking.generationTimes.length > 20) {
+            Memory.pixelTracking.generationTimes = Memory.pixelTracking.generationTimes.slice(-10);
         }
         
         // Log Pixel status every 100 ticks
