@@ -1467,11 +1467,11 @@ function createMissingConstructionSites(room) {
         
         const pos = new RoomPosition(planned.x, planned.y, room.name);
         const structures = pos.lookFor(LOOK_STRUCTURES);
-        const constructionSites = pos.lookFor(LOOK_CONSTRUCTION_SITES);
+        const constructionSitesAtPos = pos.lookFor(LOOK_CONSTRUCTION_SITES);
         
         // Check if structure or construction site already exists
         const hasStructure = structures.some(s => s.structureType === planned.type);
-        const hasConstructionSite = constructionSites.some(c => c.structureType === planned.type);
+        const hasConstructionSite = constructionSitesAtPos.some(c => c.structureType === planned.type);
         
         if (!hasStructure && !hasConstructionSite) {
             // Prioritize extensions - create more extension sites if needed
@@ -1533,13 +1533,7 @@ function getMaxStructuresByRCL(rcl, structureType) {
         [STRUCTURE_TOWER]: [0, 0, 0, 1, 1, 2, 2, 3, 6][rcl] || 0,
         [STRUCTURE_STORAGE]: [0, 0, 0, 0, 1, 1, 1, 1, 1][rcl] || 0,
         [STRUCTURE_LINK]: [0, 0, 0, 0, 0, 2, 3, 4, 6][rcl] || 0,
-        [STRUCTURE_EXTRACTOR]: [0, 0, 0, 0, 0, 0, 1, 1, 1][rcl] || 0,
-        [STRUCTURE_LAB]: [0, 0, 0, 0, 0, 0, 3, 6, 10][rcl] || 0,
-        [STRUCTURE_FACTORY]: [0, 0, 0, 0, 0, 0, 0, 1, 1][rcl] || 0,
         [STRUCTURE_TERMINAL]: [0, 0, 0, 0, 0, 0, 0, 0, 1][rcl] || 0,
-        [STRUCTURE_OBSERVER]: [0, 0, 0, 0, 0, 0, 0, 0, 1][rcl] || 0,
-        [STRUCTURE_POWER_SPAWN]: [0, 0, 0, 0, 0, 0, 0, 0, 1][rcl] || 0,
-        [STRUCTURE_NUKER]: [0, 0, 0, 0, 0, 0, 0, 0, 1][rcl] || 0,
         [STRUCTURE_SPAWN]: [1, 1, 1, 1, 1, 1, 1, 2, 3][rcl] || 0
     };
     
