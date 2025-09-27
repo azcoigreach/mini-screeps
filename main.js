@@ -24,7 +24,7 @@
  */
 
 // Configuration Constants
-const VISUALIZE_BASE = false; // Set to false to disable base plan visualization
+const VISUALIZE_BASE = true; // Set to false to disable base plan visualization
 
 // Wall and rampart maintenance configuration - hit points by RCL
 const WALL_TARGET_HITS = {
@@ -32,10 +32,10 @@ const WALL_TARGET_HITS = {
     2: 10000,       // RCL 2: Light fortification (10K hits)
     3: 30000,       // RCL 3: Medium fortification (30K hits)
     4: 100000,      // RCL 4: Strong fortification (100K hits)
-    5: 300000,      // RCL 5: Heavy fortification (300K hits)
-    6: 1000000,     // RCL 6: Fortress level (1M hits)
-    7: 3000000,     // RCL 7: Major fortress (3M hits)
-    8: 10000000     // RCL 8: Maximum fortress (10M hits)
+    5: 100000,      // RCL 5: Strong fortification (100K hits)
+    6: 100000,      // RCL 6: Strong fortification (100K hits)
+    7: 100000,      // RCL 7: Strong fortification (100K hits)
+    8: 100000       // RCL 8: Strong fortification (100K hits)
 };
 
 const RAMPART_TARGET_HITS = {
@@ -43,10 +43,10 @@ const RAMPART_TARGET_HITS = {
     2: 5000,        // RCL 2: Light fortification (5K hits)
     3: 15000,       // RCL 3: Medium fortification (15K hits)
     4: 50000,       // RCL 4: Strong fortification (50K hits)
-    5: 100000,      // RCL 5: Heavy fortification (100K hits)
-    6: 250000,      // RCL 6: Fortress level (250K hits)
-    7: 500000,      // RCL 7: Major fortress (500K hits)
-    8: 1000000      // RCL 8: Maximum fortress (1M hits)
+    5: 100000,      // RCL 5: Strong fortification (100K hits)
+    6: 100000,      // RCL 6: Strong fortification (100K hits)
+    7: 100000,      // RCL 7: Strong fortification (100K hits)
+    8: 100000       // RCL 8: Strong fortification (100K hits)
 };
 
 module.exports.loop = function () {
@@ -181,7 +181,7 @@ function planBase(room) {
     // Connect everything with roads
     planRoadNetwork(room, anchor, sources, controller);
     
-    // Use minimum cut to place walls with rampart gates for base security
+    // Place minimal defensive walls to cover room entrances
     placeWallsWithGates(room, spawn);
     
     console.log(`Base planned with ${room.memory.plannedStructures.length} structures`);
@@ -565,317 +565,7 @@ function isTurretClusterValidDistance(room, anchor, stamp) {
     return true; // All turrets maintain proper distance for creep pathfinding
 }
 
-// Wall and rampart gate placement - block room entrances with walls and rampart gates
-function placeWallsWithGates(room, spawn) {
-    const terrain = new Room.Terrain(room.name);
-    
-    console.log('🚪 Finding room entrance points for blocking...');
-    
-    // Find room edge entrance points only (ignore internal chokepoints)
-    const entrances = findRoomEntrances(terrain);
-    console.log(`Found ${entrances.length} room entrance groups`);
-    
-    // Debug: Log each entrance found
-    entrances.forEach((entrance, index) => {
-        console.log(`Entrance ${index + 1}: ${entrance.direction} at (${entrance.x},${entrance.y}) width ${entrance.width}`);
-    });
-    
-    const wallPositions = [];
-    const rampartPositions = [];
-    
-    // Process each entrance and place blocking walls with rampart gates
-    entrances.forEach(entrance => {
-        const defenseStructures = blockEntranceWithWallsAndGates(entrance, terrain);
-        wallPositions.push(...defenseStructures.walls);
-        rampartPositions.push(...defenseStructures.ramparts);
-    });
-    
-    // Remove duplicates for walls
-    const uniqueWalls = [];
-    const wallPositionSet = new Set();
-    
-    for (const wall of wallPositions) {
-        const key = `${wall.x},${wall.y}`;
-        if (!wallPositionSet.has(key) && terrain.get(wall.x, wall.y) !== TERRAIN_MASK_WALL) {
-            wallPositionSet.add(key);
-            uniqueWalls.push(wall);
-        }
-    }
-    
-    // Remove duplicates for ramparts
-    const uniqueRamparts = [];
-    const rampartPositionSet = new Set();
-    
-    for (const rampart of rampartPositions) {
-        const key = `${rampart.x},${rampart.y}`;
-        if (!rampartPositionSet.has(key) && !wallPositionSet.has(key) && terrain.get(rampart.x, rampart.y) !== TERRAIN_MASK_WALL) {
-            rampartPositionSet.add(key);
-            uniqueRamparts.push(rampart);
-        }
-    }
-    
-    // Add walls to planned structures
-    uniqueWalls.forEach(pos => {
-        room.memory.plannedStructures.push({
-            x: pos.x,
-            y: pos.y,
-            type: STRUCTURE_WALL
-        });
-    });
-    
-    // Add rampart gates to planned structures
-    uniqueRamparts.forEach(pos => {
-        room.memory.plannedStructures.push({
-            x: pos.x,
-            y: pos.y,
-            type: STRUCTURE_RAMPART
-        });
-    });
-    
-    console.log(`🛡️ Entrance defense: ${uniqueWalls.length} walls and ${uniqueRamparts.length} rampart gates blocking room entrances`);
-    
-    // Log efficiency
-    const roomArea = calculateOpenRoomArea(terrain);
-    const totalDefenses = uniqueWalls.length + uniqueRamparts.length;
-    const efficiency = roomArea / totalDefenses;
-    console.log(`Defense efficiency: ${efficiency.toFixed(1)} open tiles protected per defense structure`);
-}
 
-
-
-// Find room entrance points along the edges
-function findRoomEntrances(terrain) {
-    const entrances = [];
-    
-    // Check all room edges for openings
-    const edges = [
-        { start: [0, 0], end: [49, 0], dir: 'top' },      // Top edge
-        { start: [0, 49], end: [49, 49], dir: 'bottom' }, // Bottom edge
-        { start: [0, 0], end: [0, 49], dir: 'left' },     // Left edge
-        { start: [49, 0], end: [49, 49], dir: 'right' }   // Right edge
-    ];
-    
-    edges.forEach(edge => {
-        const positions = getEdgePositions(edge.start, edge.end);
-        
-        for (const pos of positions) {
-            if (terrain.get(pos.x, pos.y) !== TERRAIN_MASK_WALL) {
-                // This is an entrance - check how wide it is
-                const entranceWidth = measureEntranceWidth(pos.x, pos.y, edge.dir, terrain);
-                
-                entrances.push({
-                    x: pos.x,
-                    y: pos.y,
-                    width: entranceWidth,
-                    direction: edge.dir,
-                    type: 'entrance'
-                });
-            }
-        }
-    });
-    
-    // Group nearby entrance points and pick the center of each group
-    return consolidateEntrances(entrances);
-}
-
-// Get all positions along an edge
-function getEdgePositions(start, end) {
-    const positions = [];
-    const [x1, y1] = start;
-    const [x2, y2] = end;
-    
-    if (x1 === x2) { // Vertical edge
-        for (let y = Math.min(y1, y2); y <= Math.max(y1, y2); y++) {
-            positions.push({ x: x1, y: y });
-        }
-    } else { // Horizontal edge
-        for (let x = Math.min(x1, x2); x <= Math.max(x1, x2); x++) {
-            positions.push({ x: x, y: y1 });
-        }
-    }
-    
-    return positions;
-}
-
-// Measure how wide an entrance is
-function measureEntranceWidth(x, y, direction, terrain) {
-    let width = 1;
-    
-    if (direction === 'top' || direction === 'bottom') {
-        // Horizontal entrance - check left and right
-        let left = x - 1, right = x + 1;
-        while (left >= 0 && terrain.get(left, y) !== TERRAIN_MASK_WALL) {
-            width++;
-            left--;
-        }
-        while (right <= 49 && terrain.get(right, y) !== TERRAIN_MASK_WALL) {
-            width++;
-            right++;
-        }
-    } else {
-        // Vertical entrance - check up and down
-        let up = y - 1, down = y + 1;
-        while (up >= 0 && terrain.get(x, up) !== TERRAIN_MASK_WALL) {
-            width++;
-            up--;
-        }
-        while (down <= 49 && terrain.get(x, down) !== TERRAIN_MASK_WALL) {
-            width++;
-            down++;
-        }
-    }
-    
-    return width;
-}
-
-// Consolidate nearby entrance points into single strategic positions
-function consolidateEntrances(entrances) {
-    const consolidated = [];
-    const processed = new Set();
-    
-    for (let i = 0; i < entrances.length; i++) {
-        if (processed.has(i)) continue;
-        
-        const entrance = entrances[i];
-        const group = [entrance];
-        processed.add(i);
-        
-        // Find nearby entrances in the same group (more generous grouping)
-        for (let j = i + 1; j < entrances.length; j++) {
-            if (processed.has(j)) continue;
-            
-            const other = entrances[j];
-            const distance = Math.max(Math.abs(entrance.x - other.x), Math.abs(entrance.y - other.y));
-            
-            // Group entrances that are close and on the same edge
-            if (distance <= 5 && entrance.direction === other.direction) {
-                group.push(other);
-                processed.add(j);
-            }
-        }
-        
-        // Calculate the bounds of the entire entrance group
-        if (entrance.direction === 'top' || entrance.direction === 'bottom') {
-            // Horizontal entrance - find min/max X coordinates
-            const minX = Math.min(...group.map(e => e.x - Math.floor(e.width/2)));
-            const maxX = Math.max(...group.map(e => e.x + Math.floor(e.width/2)));
-            const centerX = Math.round((minX + maxX) / 2);
-            const totalWidth = maxX - minX + 1;
-            
-            consolidated.push({
-                x: centerX,
-                y: entrance.y,
-                width: totalWidth,
-                direction: entrance.direction,
-                type: 'entrance',
-                groupSize: group.length
-            });
-        } else {
-            // Vertical entrance - find min/max Y coordinates  
-            const minY = Math.min(...group.map(e => e.y - Math.floor(e.width/2)));
-            const maxY = Math.max(...group.map(e => e.y + Math.floor(e.width/2)));
-            const centerY = Math.round((minY + maxY) / 2);
-            const totalWidth = maxY - minY + 1;
-            
-            consolidated.push({
-                x: entrance.x,
-                y: centerY,
-                width: totalWidth,
-                direction: entrance.direction,
-                type: 'entrance',
-                groupSize: group.length
-            });
-        }
-    }
-    
-    return consolidated;
-}
-
-
-
-// Block an entrance with ramparts (placed 2 tiles inward from room edge)
-function blockEntranceWithWallsAndGates(entrance, terrain) {
-    const walls = [];
-    const ramparts = [];
-    const { x, y, direction, width } = entrance;
-    
-    // Calculate the inward position (2 tiles from room edge as per building rules)
-    let blockX = x;
-    let blockY = y;
-    
-    // Move block position 2 tiles inward from the edge
-    if (direction === 'top') {
-        blockY = 2; // 2 tiles down from top edge
-    } else if (direction === 'bottom') {
-        blockY = 47; // 2 tiles up from bottom edge  
-    } else if (direction === 'left') {
-        blockX = 2; // 2 tiles right from left edge
-    } else if (direction === 'right') {
-        blockX = 47; // 2 tiles left from right edge
-    }
-    
-    console.log(`Blocking ${direction} entrance: center (${x},${y}) width ${width}`);
-    
-    // Calculate entrance span and gate positions
-    let positions = [];
-    if (direction === 'top' || direction === 'bottom') {
-        // Horizontal entrance - place defenses along x-axis at fixed y
-        const startX = Math.max(2, x - Math.floor(width/2));
-        const endX = Math.min(47, x + Math.floor(width/2));
-        
-        for (let checkX = startX; checkX <= endX; checkX++) {
-            if (terrain.get(checkX, blockY) !== TERRAIN_MASK_WALL) {
-                positions.push({ x: checkX, y: blockY });
-            }
-        }
-    } else {
-        // Vertical entrance - place defenses along y-axis at fixed x
-        const startY = Math.max(2, y - Math.floor(width/2));
-        const endY = Math.min(47, y + Math.floor(width/2));
-        
-        for (let checkY = startY; checkY <= endY; checkY++) {
-            if (terrain.get(blockX, checkY) !== TERRAIN_MASK_WALL) {
-                positions.push({ x: blockX, y: checkY });
-            }
-        }
-    }
-    
-    // Place walls on most positions, rampart gates in the middle 2 positions
-    const totalPositions = positions.length;
-    if (totalPositions <= 2) {
-        // Small entrance - all ramparts (gates)
-        ramparts.push(...positions);
-    } else {
-        // Larger entrance - walls on edges, 2 rampart gates in middle
-        const middleStart = Math.floor((totalPositions - 2) / 2);
-        const middleEnd = middleStart + 1;
-        
-        positions.forEach((pos, index) => {
-            if (index === middleStart || index === middleEnd) {
-                ramparts.push(pos);
-            } else {
-                walls.push(pos);
-            }
-        });
-    }
-    
-    return { walls, ramparts };
-}
-
-// Calculate total open area in room
-function calculateOpenRoomArea(terrain) {
-    let openArea = 0;
-    
-    for (let x = 0; x < 50; x++) {
-        for (let y = 0; y < 50; y++) {
-            if (terrain.get(x, y) !== TERRAIN_MASK_WALL) {
-                openArea++;
-            }
-        }
-    }
-    
-    return openArea;
-}
 
 // Helper function: Check if stamp can be placed at position
 function isValidStampPosition(room, anchor, stamp) {
@@ -1121,6 +811,51 @@ function addPathAsRoads(room, path, routeName = 'Unknown Route') {
     // Log road placement summary
     if (roadsAdded > 0 || roadsSkipped > 0 || structureConflicts > 0 || wallConflicts > 0) {
         console.log(`🛣️ ${routeName}: ${roadsAdded} roads added, ${roadsSkipped} duplicates skipped, ${structureConflicts} structure conflicts avoided, ${wallConflicts} wall conflicts avoided`);
+    }
+}
+
+function placeWallsWithGates(room, spawn) {
+    const center = room.memory.baseCenter || { x: spawn.pos.x, y: spawn.pos.y };
+    const goal = new RoomPosition(center.x, center.y, room.name);
+    const terrain = new Room.Terrain(room.name);
+    const starts = [];
+    const seen = new Set();
+
+    const pushStart = (x, y, edgeX, edgeY) => {
+        if (x < 0 || x > 49 || y < 0 || y > 49) return;
+        if (terrain.get(edgeX, edgeY) === TERRAIN_MASK_WALL) return;
+        if (terrain.get(x, y) === TERRAIN_MASK_WALL) return;
+        const key = `${x}:${y}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        starts.push(new RoomPosition(x, y, room.name));
+    };
+
+    for (let y = 1; y <= 48; y++) {
+        pushStart(1, y, 0, y);
+        pushStart(48, y, 49, y);
+    }
+    for (let x = 1; x <= 48; x++) {
+        pushStart(x, 1, x, 0);
+        pushStart(x, 48, x, 49);
+    }
+
+    const placed = new Set();
+    const stamp = [[0, 0, STRUCTURE_WALL]];
+
+    for (const start of starts) {
+        const result = PathFinder.search(start, { pos: goal, range: 5 }, { maxRooms: 1 });
+        if (!result.path || result.path.length === 0) continue;
+        const step = result.path.find(pos => pos.x > 1 && pos.x < 48 && pos.y > 1 && pos.y < 48);
+        if (!step) continue;
+        const key = `${step.x}:${step.y}`;
+        if (placed.has(key)) continue;
+        addStampToPlannedStructures(room, { x: step.x, y: step.y }, stamp);
+        placed.add(key);
+    }
+
+    if (placed.size > 0) {
+        console.log(`🧱 Planned ${placed.size} entrance walls for room ${room.name}`);
     }
 }
 
