@@ -1289,64 +1289,160 @@ function spawnCreeps(spawn, creeps) {
     }
 }
 
-// Hard-coded population targets by RCL
+// Automated population control based on throughput calculations
 function getPopulationByRCL(rcl) {
-    switch (rcl) {
-        case 1:
-            return { miner: 2, hauler: 1, upgrader: 1, builder: 2 };
-        case 2:
-            return { miner: 2, hauler: 3, upgrader: 2, builder: 4 };
-        case 3:
-            return { miner: 2, hauler: 4, upgrader: 2, builder: 4 };
-        case 4:
-            return { miner: 2, hauler: 4, upgrader: 3, builder: 3 };
-        case 5:
-            return { miner: 2, hauler: 4, upgrader: 4, builder: 3 };
-        case 6:
-            return { miner: 2, hauler: 4, upgrader: 4, builder: 2 };
-        case 7:
-            return { miner: 2, hauler: 4, upgrader: 5, builder: 2 };
-        case 8:
-            return { miner: 2, hauler: 3, upgrader: 6, builder: 2 };
-        default:
-            return { miner: 2, hauler: 1, upgrader: 1, builder: 1 };
+    const spawn = Game.spawns[Object.keys(Game.spawns)[0]];
+    if (!spawn) return { miner: 2, hauler: 1, upgrader: 1, builder: 1 };
+
+    const room = spawn.room;
+    const sources = room.find(FIND_SOURCES);
+
+    // Calculate average distance from spawn to sources for throughput math
+    let totalDistance = 0;
+    sources.forEach(source => {
+        const path = PathFinder.search(spawn.pos, { pos: source.pos, range: 1 }, {
+            roomCallback: () => createRoadPlanningCostMatrix(room),
+            maxRooms: 1
+        });
+        totalDistance += path.cost;
+    });
+    const avgDistance = totalDistance / sources.length;
+
+    // Throughput Math Implementation:
+    // Trtt = 2d + 4 (round-trip time formula)
+    const roundTripTime = 2 * avgDistance + 4;
+
+    // CARRY = Math.ceil((2/5) * Trtt) for optimal hauler sizing
+    const carryPerHauler = Math.ceil((2/5) * roundTripTime);
+
+    // Total energy flow: sources × 10 energy/tick = 20 energy/tick
+    const totalEnergyFlow = sources.length * 10;
+
+    // Calculate hauler capacity per trip (CARRY parts × 50 energy)
+    const energyPerTripPerHauler = carryPerHauler * 50;
+
+    // Haulers needed = total energy flow / energy per trip per hauler
+    // But account for travel time - haulers spend Trtt ticks traveling
+    const haulerEfficiency = 1 / (1 + roundTripTime / 50); // Rough efficiency factor
+    const haulersNeeded = Math.ceil(totalEnergyFlow / (energyPerTripPerHauler * haulerEfficiency));
+
+    // Miners: Always 1 per source (5W1M can harvest 10 energy/tick, matching source output)
+    const minersNeeded = sources.length;
+
+    // Remaining energy after hauler needs for upgraders and builders
+    const energyForUpgradersBuilders = Math.max(0, totalEnergyFlow - (haulersNeeded * energyPerTripPerHauler * haulerEfficiency));
+
+    // Upgraders and builders scale with RCL and available energy
+    let upgradersNeeded = 1;
+    let buildersNeeded = 1;
+
+    if (rcl >= 2) {
+        // More upgraders at higher RCL for faster progression
+        upgradersNeeded = Math.min(6, Math.max(1, Math.floor(energyForUpgradersBuilders / 5)));
+        buildersNeeded = Math.min(4, Math.max(1, Math.floor(energyForUpgradersBuilders / 3)));
     }
+
+    // Ensure minimums for stability
+    const result = {
+        miner: Math.max(1, minersNeeded),
+        hauler: Math.max(1, haulersNeeded),
+        upgrader: Math.max(1, upgradersNeeded),
+        builder: Math.max(1, buildersNeeded)
+    };
+
+    // Log throughput calculations every 100 ticks
+    if (Game.time % 100 === 0) {
+        console.log(`📊 THROUGHPUT CALC: avgDist=${avgDistance.toFixed(1)}, Trtt=${roundTripTime.toFixed(1)}, carryNeeded=${carryPerHauler}, haulers=${result.hauler}, miners=${result.miner}`);
+        console.log(`⚡ ENERGY FLOW: ${totalEnergyFlow} e/tick from ${sources.length} sources, ${energyForUpgradersBuilders.toFixed(1)} e/tick available for upgraders/builders`);
+    }
+
+    return result;
 }
 
-// Hard-coded body configurations by energy capacity
+// Automated body configurations based on energy capacity and throughput calculations
 function getBodiesByEnergyCapacity(energyCapacity) {
+    const spawn = Game.spawns[Object.keys(Game.spawns)[0]];
+    if (!spawn) {
+        // Fallback for early game when no spawn exists
+        return {
+            miner: [WORK, WORK, MOVE],
+            hauler: [CARRY, CARRY, MOVE],
+            upgrader: [WORK, CARRY, MOVE],
+            builder: [WORK, CARRY, MOVE]
+        };
+    }
+
+    const room = spawn.room;
+    const sources = room.find(FIND_SOURCES);
+
+    // Calculate optimal hauler body based on throughput math
+    let totalDistance = 0;
+    sources.forEach(source => {
+        const path = PathFinder.search(spawn.pos, { pos: source.pos, range: 1 }, {
+            roomCallback: () => createRoadPlanningCostMatrix(room),
+            maxRooms: 1
+        });
+        totalDistance += path.cost;
+    });
+    const avgDistance = totalDistance / sources.length;
+    const roundTripTime = 2 * avgDistance + 4;
+    const carryNeeded = Math.ceil((2/5) * roundTripTime);
+
+    // Calculate optimal MOVE parts (roughly 1 MOVE per 2 CARRY for balanced ratio)
+    const moveNeeded = Math.ceil(carryNeeded / 2);
+
+    // Create hauler body with calculated CARRY/MOVE ratio
+    const haulerBody = [];
+    for (let i = 0; i < carryNeeded; i++) haulerBody.push(CARRY);
+    for (let i = 0; i < moveNeeded; i++) haulerBody.push(MOVE);
+
+    // Check if we can afford this hauler body, otherwise scale down
+    const haulerCost = haulerBody.reduce((cost, part) => cost + (part === CARRY ? 50 : 50), 0);
+    let affordableHaulerBody = haulerBody;
+
+    if (haulerCost > energyCapacity) {
+        // Scale down hauler body to fit energy capacity
+        const maxParts = Math.floor(energyCapacity / 50); // Each part costs 50 energy
+        const carryParts = Math.max(1, Math.floor(maxParts * 0.6)); // 60% CARRY
+        const moveParts = Math.max(1, maxParts - carryParts); // Rest MOVE
+
+        affordableHaulerBody = [];
+        for (let i = 0; i < carryParts; i++) affordableHaulerBody.push(CARRY);
+        for (let i = 0; i < moveParts; i++) affordableHaulerBody.push(MOVE);
+    }
+
     if (energyCapacity >= 1800) { // RCL 6+
         return {
             miner: [WORK, WORK, WORK, WORK, WORK, MOVE], // 5W1M
-            hauler: [CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, MOVE, MOVE, MOVE, MOVE, MOVE, MOVE, MOVE, MOVE], // 16C8M
+            hauler: affordableHaulerBody, // Throughput-calculated
             upgrader: [WORK, WORK, WORK, WORK, WORK, WORK, WORK, WORK, WORK, WORK, CARRY, CARRY, CARRY, MOVE, MOVE, MOVE], // 10W3C3M
             builder: [WORK, WORK, WORK, WORK, WORK, WORK, WORK, CARRY, CARRY, CARRY, CARRY, CARRY, MOVE, MOVE, MOVE, MOVE] // 7W5C4M
         };
     } else if (energyCapacity >= 1300) { // RCL 5
         return {
             miner: [WORK, WORK, WORK, WORK, WORK, MOVE], // 5W1M
-            hauler: [CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, MOVE, MOVE, MOVE, MOVE, MOVE, MOVE], // 12C6M
+            hauler: affordableHaulerBody, // Throughput-calculated
             upgrader: [WORK, WORK, WORK, WORK, WORK, WORK, WORK, CARRY, CARRY, MOVE, MOVE], // 7W2C2M
             builder: [WORK, WORK, WORK, WORK, WORK, CARRY, CARRY, CARRY, CARRY, MOVE, MOVE, MOVE] // 5W4C3M
         };
     } else if (energyCapacity >= 800) { // RCL 4
         return {
             miner: [WORK, WORK, WORK, WORK, WORK, MOVE], // 5W1M
-            hauler: [CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, MOVE, MOVE, MOVE, MOVE], // 8C4M
+            hauler: affordableHaulerBody, // Throughput-calculated
             upgrader: [WORK, WORK, WORK, WORK, WORK, CARRY, CARRY, MOVE], // 5W2C1M
             builder: [WORK, WORK, WORK, WORK, CARRY, CARRY, CARRY, MOVE, MOVE] // 4W3C2M
         };
     } else if (energyCapacity >= 550) { // RCL 3
         return {
             miner: [WORK, WORK, WORK, WORK, WORK, MOVE], // 5W1M
-            hauler: [CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, MOVE, MOVE, MOVE], // 8C3M
+            hauler: affordableHaulerBody, // Throughput-calculated
             upgrader: [WORK, WORK, WORK, WORK, CARRY, MOVE], // 4W1C1M
             builder: [WORK, WORK, WORK, CARRY, CARRY, MOVE, MOVE, MOVE] // 3W2C3M
         };
     } else { // RCL 1-2
         return {
             miner: [WORK, WORK, MOVE], // 2W1M - only 250 energy
-            hauler: [CARRY, CARRY, MOVE], // 2C1M
+            hauler: affordableHaulerBody.length > 0 ? affordableHaulerBody : [CARRY, CARRY, MOVE], // Throughput-calculated or fallback
             upgrader: [WORK, CARRY, MOVE], // 1W1C1M
             builder: [WORK, CARRY, MOVE] // 1W1C1M
         };
