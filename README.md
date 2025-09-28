@@ -119,7 +119,7 @@ Spawn/Extensions → Upgraders/Builders → Controller/Construction
 - **Source Containers**: Adjacent to each source for miner deposits
 - **Controller Container**: 2-3 tiles from controller for upgrader access
 - **Road Planning**: Automatic road placement for improved travel efficiency
-- **Wall & Rampart Gates**: Minimum-cut algorithm places defensive barriers with controlled entrances
+- **Entrance Sealing (Book-ends + Curtain)**: For each natural entrance, places book-end walls and an interior curtain two tiles inside the room; the curtain extends two tiles beyond both entrance ends and has a single center rampart gate
 - **Defense Hit Points**: RCL-scaled maintenance targets (RCL 1: 1K hits → RCL 8: 10M hits for walls)
 
 ### **Construction Priority System**
@@ -130,10 +130,15 @@ Spawn/Extensions → Upgraders/Builders → Controller/Construction
 
 ## 🛡️ **Defense System**
 
-### **Automated Wall & Rampart Management**
-- **RCL-Scaled Hit Points**: Walls and ramparts maintained to level-appropriate targets
+### **Automated Wall Maintenance**
+- **RCL-Scaled Hit Points**: Walls maintained to level-appropriate targets
 - **Priority Repair**: Builders prioritize defense structures below target HP
-- **Gate Placement**: Rampart gates placed at room entrances for controlled access
+- **Entrance Sealing**: Edge book-ends and an interior curtain are placed automatically across room entrances
+  - Curtain depth: 2 tiles into the room
+  - Curtain width: 2 tiles beyond each entrance end (overhang on both sides)
+  - Gate: the curtain's center tile is a rampart (friendly passage)
+  - Terrain-aware: never plans walls/ramparts on terrain walls
+  - Book-ends: placed at the curtain’s overhang endpoints with fallback depths (1 → 2)
 
 ### **Tower Defense**
 - **Hostile Detection**: Automatic activation when enemies detected
@@ -220,6 +225,7 @@ Spawn/Extensions → Upgraders/Builders → Controller/Construction
 - **Pathfinding Optimization**: Cost matrices avoid walls and prioritize roads
 - **Source Distribution**: Balanced energy gathering across all sources
 - **Construction Prioritization**: Extensions before roads, closest structures first
+ - **Entrance Analysis**: Edge scanning finds passable spans and generates book-ends plus a curtain with a centered rampart gate
 
 ### **Memory Management**
 - Automatic cleanup of dead creep memory
@@ -244,6 +250,13 @@ Spawn/Extensions → Upgraders/Builders → Controller/Construction
 - Round-trip time calculations for hauler optimization
 - CARRY/MOVE ratio optimization based on distance
 - Cached calculations for performance
+
+### **Defense Configuration**
+
+- `ENTRANCE_CURTAIN_DEPTH` (default: 2): Depth in tiles from the room edge for the interior curtain
+- `ENTRANCE_OVERHANG_TILES` (default: 2): Overhang in tiles beyond the entrance ends for both the curtain and the book-ends
+
+These constants are defined near the top of `main.js` and control entrance sealing behavior.
 
 ## 📈 **Optimization Focus**
 

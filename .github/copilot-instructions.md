@@ -131,3 +131,22 @@ Unlike typical Screeps bots, this code calculates exact energy throughput requir
 2. Add `placeComponentStamp()` function
 3. Call from `planBase()` function
 4. Ensure roads connect via `planRoadNetwork()`
+
+## Entrance Sealing (Book-ends + Curtain)
+
+The bot seals natural room entrances with a minimal pattern that still allows friendly passage:
+
+- Book-ends: two constructed walls placed inside the room at the overhang endpoints of each entrance span
+- Curtain: a continuous line of walls `ENTRANCE_CURTAIN_DEPTH` tiles inside the room across the entrance
+- Overhang: curtain extends `ENTRANCE_OVERHANG_TILES` tiles beyond both entrance ends (default 2)
+- Gate: the curtain’s center tile is a rampart (friendly passage)
+- Terrain-aware: never plans walls/ramparts on terrain wall tiles
+
+Config constants (top of `main.js`):
+
+```js
+const ENTRANCE_CURTAIN_DEPTH = 2;
+const ENTRANCE_OVERHANG_TILES = 2;
+```
+
+When modifying defense planning, preserve these invariants (overhang width, depth, and center rampart gate) unless deliberately changing the design.

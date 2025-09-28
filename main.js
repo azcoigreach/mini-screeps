@@ -24,29 +24,23 @@
  */
 
 // Configuration Constants
-const VISUALIZE_BASE = false; // Set to false to disable base plan visualization
+const VISUALIZE_BASE = true; // Set to false to disable base plan visualization
 
-// Wall and rampart maintenance configuration - hit points by RCL
+// Edge defense configuration
+// Depth (tiles into the room) for the curtain line; overhang tiles each side beyond the entrance span
+const ENTRANCE_CURTAIN_DEPTH = 2;
+const ENTRANCE_OVERHANG_TILES = 2; // curtain and book-ends extend this many tiles beyond the entrance ends
+
+// Wall maintenance configuration - hit points by RCL
 const WALL_TARGET_HITS = {
     1: 1000,        // RCL 1: Basic protection (1K hits)
     2: 10000,       // RCL 2: Light fortification (10K hits)
     3: 30000,       // RCL 3: Medium fortification (30K hits)
     4: 100000,      // RCL 4: Strong fortification (100K hits)
-    5: 300000,      // RCL 5: Heavy fortification (300K hits)
-    6: 1000000,     // RCL 6: Fortress level (1M hits)
-    7: 3000000,     // RCL 7: Major fortress (3M hits)
-    8: 10000000     // RCL 8: Maximum fortress (10M hits)
-};
-
-const RAMPART_TARGET_HITS = {
-    1: 1000,        // RCL 1: Basic protection (1K hits)
-    2: 5000,        // RCL 2: Light fortification (5K hits)
-    3: 15000,       // RCL 3: Medium fortification (15K hits)
-    4: 50000,       // RCL 4: Strong fortification (50K hits)
-    5: 100000,      // RCL 5: Heavy fortification (100K hits)
-    6: 250000,      // RCL 6: Fortress level (250K hits)
-    7: 500000,      // RCL 7: Major fortress (500K hits)
-    8: 1000000      // RCL 8: Maximum fortress (1M hits)
+    5: 100000,      // RCL 5: Strong fortification (100K hits)
+    6: 100000,      // RCL 6: Strong fortification (100K hits)
+    7: 100000,      // RCL 7: Strong fortification (100K hits)
+    8: 100000       // RCL 8: Strong fortification (100K hits)
 };
 
 module.exports.loop = function () {
@@ -87,7 +81,7 @@ module.exports.loop = function () {
         createMissingConstructionSites(room);
     }
 
-    // Manage wall and rampart hit points less frequently
+    // Manage wall hit points less frequently
     if (Game.time % 50 === 0) {
         manageDefenseHitPoints(room);
     }
@@ -181,8 +175,16 @@ function planBase(room) {
     // Connect everything with roads
     planRoadNetwork(room, anchor, sources, controller);
     
-    // Use minimum cut to place walls with rampart gates for base security
-    placeWallsWithGates(room, spawn);
+    // Place minimal bookend walls - just 2 walls per entrance at the endpoints
+    // This strategy places walls only at the ends of each passable span, allowing
+    // enemies to enter but significantly restricting their movement options
+    const edgeSealPlan = planMinimalEdgeSeal(room);
+    buildPlannedEdgeSeal(room, edgeSealPlan);
+
+    // Add an interior "curtain" line 2 tiles inside the room across each entrance
+    // with a single center rampart as a friendly gate.
+    const entranceCurtainPlan = planEntranceCurtains(room);
+    buildEntranceCurtains(room, entranceCurtainPlan);
     
     console.log(`Base planned with ${room.memory.plannedStructures.length} structures`);
 }
@@ -565,317 +567,7 @@ function isTurretClusterValidDistance(room, anchor, stamp) {
     return true; // All turrets maintain proper distance for creep pathfinding
 }
 
-// Wall and rampart gate placement - block room entrances with walls and rampart gates
-function placeWallsWithGates(room, spawn) {
-    const terrain = new Room.Terrain(room.name);
-    
-    console.log('🚪 Finding room entrance points for blocking...');
-    
-    // Find room edge entrance points only (ignore internal chokepoints)
-    const entrances = findRoomEntrances(terrain);
-    console.log(`Found ${entrances.length} room entrance groups`);
-    
-    // Debug: Log each entrance found
-    entrances.forEach((entrance, index) => {
-        console.log(`Entrance ${index + 1}: ${entrance.direction} at (${entrance.x},${entrance.y}) width ${entrance.width}`);
-    });
-    
-    const wallPositions = [];
-    const rampartPositions = [];
-    
-    // Process each entrance and place blocking walls with rampart gates
-    entrances.forEach(entrance => {
-        const defenseStructures = blockEntranceWithWallsAndGates(entrance, terrain);
-        wallPositions.push(...defenseStructures.walls);
-        rampartPositions.push(...defenseStructures.ramparts);
-    });
-    
-    // Remove duplicates for walls
-    const uniqueWalls = [];
-    const wallPositionSet = new Set();
-    
-    for (const wall of wallPositions) {
-        const key = `${wall.x},${wall.y}`;
-        if (!wallPositionSet.has(key) && terrain.get(wall.x, wall.y) !== TERRAIN_MASK_WALL) {
-            wallPositionSet.add(key);
-            uniqueWalls.push(wall);
-        }
-    }
-    
-    // Remove duplicates for ramparts
-    const uniqueRamparts = [];
-    const rampartPositionSet = new Set();
-    
-    for (const rampart of rampartPositions) {
-        const key = `${rampart.x},${rampart.y}`;
-        if (!rampartPositionSet.has(key) && !wallPositionSet.has(key) && terrain.get(rampart.x, rampart.y) !== TERRAIN_MASK_WALL) {
-            rampartPositionSet.add(key);
-            uniqueRamparts.push(rampart);
-        }
-    }
-    
-    // Add walls to planned structures
-    uniqueWalls.forEach(pos => {
-        room.memory.plannedStructures.push({
-            x: pos.x,
-            y: pos.y,
-            type: STRUCTURE_WALL
-        });
-    });
-    
-    // Add rampart gates to planned structures
-    uniqueRamparts.forEach(pos => {
-        room.memory.plannedStructures.push({
-            x: pos.x,
-            y: pos.y,
-            type: STRUCTURE_RAMPART
-        });
-    });
-    
-    console.log(`🛡️ Entrance defense: ${uniqueWalls.length} walls and ${uniqueRamparts.length} rampart gates blocking room entrances`);
-    
-    // Log efficiency
-    const roomArea = calculateOpenRoomArea(terrain);
-    const totalDefenses = uniqueWalls.length + uniqueRamparts.length;
-    const efficiency = roomArea / totalDefenses;
-    console.log(`Defense efficiency: ${efficiency.toFixed(1)} open tiles protected per defense structure`);
-}
 
-
-
-// Find room entrance points along the edges
-function findRoomEntrances(terrain) {
-    const entrances = [];
-    
-    // Check all room edges for openings
-    const edges = [
-        { start: [0, 0], end: [49, 0], dir: 'top' },      // Top edge
-        { start: [0, 49], end: [49, 49], dir: 'bottom' }, // Bottom edge
-        { start: [0, 0], end: [0, 49], dir: 'left' },     // Left edge
-        { start: [49, 0], end: [49, 49], dir: 'right' }   // Right edge
-    ];
-    
-    edges.forEach(edge => {
-        const positions = getEdgePositions(edge.start, edge.end);
-        
-        for (const pos of positions) {
-            if (terrain.get(pos.x, pos.y) !== TERRAIN_MASK_WALL) {
-                // This is an entrance - check how wide it is
-                const entranceWidth = measureEntranceWidth(pos.x, pos.y, edge.dir, terrain);
-                
-                entrances.push({
-                    x: pos.x,
-                    y: pos.y,
-                    width: entranceWidth,
-                    direction: edge.dir,
-                    type: 'entrance'
-                });
-            }
-        }
-    });
-    
-    // Group nearby entrance points and pick the center of each group
-    return consolidateEntrances(entrances);
-}
-
-// Get all positions along an edge
-function getEdgePositions(start, end) {
-    const positions = [];
-    const [x1, y1] = start;
-    const [x2, y2] = end;
-    
-    if (x1 === x2) { // Vertical edge
-        for (let y = Math.min(y1, y2); y <= Math.max(y1, y2); y++) {
-            positions.push({ x: x1, y: y });
-        }
-    } else { // Horizontal edge
-        for (let x = Math.min(x1, x2); x <= Math.max(x1, x2); x++) {
-            positions.push({ x: x, y: y1 });
-        }
-    }
-    
-    return positions;
-}
-
-// Measure how wide an entrance is
-function measureEntranceWidth(x, y, direction, terrain) {
-    let width = 1;
-    
-    if (direction === 'top' || direction === 'bottom') {
-        // Horizontal entrance - check left and right
-        let left = x - 1, right = x + 1;
-        while (left >= 0 && terrain.get(left, y) !== TERRAIN_MASK_WALL) {
-            width++;
-            left--;
-        }
-        while (right <= 49 && terrain.get(right, y) !== TERRAIN_MASK_WALL) {
-            width++;
-            right++;
-        }
-    } else {
-        // Vertical entrance - check up and down
-        let up = y - 1, down = y + 1;
-        while (up >= 0 && terrain.get(x, up) !== TERRAIN_MASK_WALL) {
-            width++;
-            up--;
-        }
-        while (down <= 49 && terrain.get(x, down) !== TERRAIN_MASK_WALL) {
-            width++;
-            down++;
-        }
-    }
-    
-    return width;
-}
-
-// Consolidate nearby entrance points into single strategic positions
-function consolidateEntrances(entrances) {
-    const consolidated = [];
-    const processed = new Set();
-    
-    for (let i = 0; i < entrances.length; i++) {
-        if (processed.has(i)) continue;
-        
-        const entrance = entrances[i];
-        const group = [entrance];
-        processed.add(i);
-        
-        // Find nearby entrances in the same group (more generous grouping)
-        for (let j = i + 1; j < entrances.length; j++) {
-            if (processed.has(j)) continue;
-            
-            const other = entrances[j];
-            const distance = Math.max(Math.abs(entrance.x - other.x), Math.abs(entrance.y - other.y));
-            
-            // Group entrances that are close and on the same edge
-            if (distance <= 5 && entrance.direction === other.direction) {
-                group.push(other);
-                processed.add(j);
-            }
-        }
-        
-        // Calculate the bounds of the entire entrance group
-        if (entrance.direction === 'top' || entrance.direction === 'bottom') {
-            // Horizontal entrance - find min/max X coordinates
-            const minX = Math.min(...group.map(e => e.x - Math.floor(e.width/2)));
-            const maxX = Math.max(...group.map(e => e.x + Math.floor(e.width/2)));
-            const centerX = Math.round((minX + maxX) / 2);
-            const totalWidth = maxX - minX + 1;
-            
-            consolidated.push({
-                x: centerX,
-                y: entrance.y,
-                width: totalWidth,
-                direction: entrance.direction,
-                type: 'entrance',
-                groupSize: group.length
-            });
-        } else {
-            // Vertical entrance - find min/max Y coordinates  
-            const minY = Math.min(...group.map(e => e.y - Math.floor(e.width/2)));
-            const maxY = Math.max(...group.map(e => e.y + Math.floor(e.width/2)));
-            const centerY = Math.round((minY + maxY) / 2);
-            const totalWidth = maxY - minY + 1;
-            
-            consolidated.push({
-                x: entrance.x,
-                y: centerY,
-                width: totalWidth,
-                direction: entrance.direction,
-                type: 'entrance',
-                groupSize: group.length
-            });
-        }
-    }
-    
-    return consolidated;
-}
-
-
-
-// Block an entrance with ramparts (placed 2 tiles inward from room edge)
-function blockEntranceWithWallsAndGates(entrance, terrain) {
-    const walls = [];
-    const ramparts = [];
-    const { x, y, direction, width } = entrance;
-    
-    // Calculate the inward position (2 tiles from room edge as per building rules)
-    let blockX = x;
-    let blockY = y;
-    
-    // Move block position 2 tiles inward from the edge
-    if (direction === 'top') {
-        blockY = 2; // 2 tiles down from top edge
-    } else if (direction === 'bottom') {
-        blockY = 47; // 2 tiles up from bottom edge  
-    } else if (direction === 'left') {
-        blockX = 2; // 2 tiles right from left edge
-    } else if (direction === 'right') {
-        blockX = 47; // 2 tiles left from right edge
-    }
-    
-    console.log(`Blocking ${direction} entrance: center (${x},${y}) width ${width}`);
-    
-    // Calculate entrance span and gate positions
-    let positions = [];
-    if (direction === 'top' || direction === 'bottom') {
-        // Horizontal entrance - place defenses along x-axis at fixed y
-        const startX = Math.max(2, x - Math.floor(width/2));
-        const endX = Math.min(47, x + Math.floor(width/2));
-        
-        for (let checkX = startX; checkX <= endX; checkX++) {
-            if (terrain.get(checkX, blockY) !== TERRAIN_MASK_WALL) {
-                positions.push({ x: checkX, y: blockY });
-            }
-        }
-    } else {
-        // Vertical entrance - place defenses along y-axis at fixed x
-        const startY = Math.max(2, y - Math.floor(width/2));
-        const endY = Math.min(47, y + Math.floor(width/2));
-        
-        for (let checkY = startY; checkY <= endY; checkY++) {
-            if (terrain.get(blockX, checkY) !== TERRAIN_MASK_WALL) {
-                positions.push({ x: blockX, y: checkY });
-            }
-        }
-    }
-    
-    // Place walls on most positions, rampart gates in the middle 2 positions
-    const totalPositions = positions.length;
-    if (totalPositions <= 2) {
-        // Small entrance - all ramparts (gates)
-        ramparts.push(...positions);
-    } else {
-        // Larger entrance - walls on edges, 2 rampart gates in middle
-        const middleStart = Math.floor((totalPositions - 2) / 2);
-        const middleEnd = middleStart + 1;
-        
-        positions.forEach((pos, index) => {
-            if (index === middleStart || index === middleEnd) {
-                ramparts.push(pos);
-            } else {
-                walls.push(pos);
-            }
-        });
-    }
-    
-    return { walls, ramparts };
-}
-
-// Calculate total open area in room
-function calculateOpenRoomArea(terrain) {
-    let openArea = 0;
-    
-    for (let x = 0; x < 50; x++) {
-        for (let y = 0; y < 50; y++) {
-            if (terrain.get(x, y) !== TERRAIN_MASK_WALL) {
-                openArea++;
-            }
-        }
-    }
-    
-    return openArea;
-}
 
 // Helper function: Check if stamp can be placed at position
 function isValidStampPosition(room, anchor, stamp) {
@@ -995,18 +687,18 @@ function createRoadPlanningCostMatrix(room) {
         }
     }
     
-    // Avoid existing walls and ramparts (very expensive to go through)
+    // Avoid existing walls (very expensive to go through)
     const walls = room.find(FIND_STRUCTURES, {
-        filter: s => s.structureType === STRUCTURE_WALL || s.structureType === STRUCTURE_RAMPART
+        filter: s => s.structureType === STRUCTURE_WALL
     });
     walls.forEach(wall => {
         costs.set(wall.pos.x, wall.pos.y, 255); // Make walls impassable
     });
     
-    // Avoid planned walls and ramparts
+    // Avoid planned walls
     if (room.memory.plannedStructures) {
         room.memory.plannedStructures.forEach(planned => {
-            if (planned.type === STRUCTURE_WALL || planned.type === STRUCTURE_RAMPART) {
+            if (planned.type === STRUCTURE_WALL) {
                 costs.set(planned.x, planned.y, 255); // Make planned walls impassable
             } else if (planned.type !== STRUCTURE_ROAD) {
                 costs.set(planned.x, planned.y, 10); // Avoid other planned structures but allow if needed
@@ -1091,13 +783,13 @@ function addPathAsRoads(room, path, routeName = 'Unknown Route') {
             continue; // Road already exists, don't add duplicate
         }
         
-        // Skip if wall or rampart exists (planned or built) - these are impassable or expensive
-        const hasWallPlanned = existingPlanned.some(s => s.type === STRUCTURE_WALL || s.type === STRUCTURE_RAMPART);
-        const hasWallBuilt = existingBuilt.some(s => s.structureType === STRUCTURE_WALL || s.structureType === STRUCTURE_RAMPART);
+        // Skip if wall exists (planned or built) - these are impassable or expensive
+        const hasWallPlanned = existingPlanned.some(s => s.type === STRUCTURE_WALL);
+        const hasWallBuilt = existingBuilt.some(s => s.structureType === STRUCTURE_WALL);
         
         if (hasWallPlanned || hasWallBuilt) {
             wallConflicts++;
-            continue; // Don't place road through walls/ramparts - extremely expensive
+            continue; // Don't place road through walls - extremely expensive
         }
         
         // Skip if non-road structure exists (planned or built)
@@ -1121,6 +813,336 @@ function addPathAsRoads(room, path, routeName = 'Unknown Route') {
     // Log road placement summary
     if (roadsAdded > 0 || roadsSkipped > 0 || structureConflicts > 0 || wallConflicts > 0) {
         console.log(`🛣️ ${routeName}: ${roadsAdded} roads added, ${roadsSkipped} duplicates skipped, ${structureConflicts} structure conflicts avoided, ${wallConflicts} wall conflicts avoided`);
+    }
+}
+
+/**
+ * Plan "bookend walls" - minimal defense strategy that places exactly 2 walls per entrance
+ * at the endpoints of each passable span. This approach:
+ * - Blocks enemy creeps from easily slipping through entrance corners
+ * - Leaves the middle open (assuming natural terrain blocks or that gaps are acceptable)
+ * - Minimizes wall count while providing basic entrance control
+ * - Prefers distance 1 from edge, falls back to distance 2 if needed
+ */
+function planMinimalEdgeSeal(room) {
+    const terrain = room.getTerrain();
+
+    function isPassable(x, y) {
+        return terrain.get(x, y) !== TERRAIN_MASK_WALL;
+    }
+    
+    function inInnerBounds(x, y) {
+        return x >= 1 && x <= 48 && y >= 1 && y <= 48;
+    }
+    
+    function isUnbuildable(x, y) {
+        if (!inInnerBounds(x, y)) return true;
+        if (terrain.get(x, y) === TERRAIN_MASK_WALL) return true;
+        
+        const look = room.lookAt(x, y);
+        for (const o of look) {
+            if (o.type === LOOK_STRUCTURES ||
+                o.type === LOOK_CONSTRUCTION_SITES ||
+                o.type === LOOK_SOURCES ||
+                o.type === LOOK_MINERALS) {
+                return true;
+            }
+            // Check for controller specifically
+            if (o.type === LOOK_STRUCTURES && o.structure && o.structure.structureType === STRUCTURE_CONTROLLER) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    function scanEdge(edge) {
+        const out = [];
+        if (edge === "TOP") {
+            for (let x = 0; x < 50; x++) {
+                if (isPassable(x, 0)) out.push({x, y: 0});
+            }
+        } else if (edge === "BOTTOM") {
+            for (let x = 0; x < 50; x++) {
+                if (isPassable(x, 49)) out.push({x, y: 49});
+            }
+        } else if (edge === "LEFT") {
+            for (let y = 0; y < 50; y++) {
+                if (isPassable(0, y)) out.push({x: 0, y});
+            }
+        } else if (edge === "RIGHT") {
+            for (let y = 0; y < 50; y++) {
+                if (isPassable(49, y)) out.push({x: 49, y});
+            }
+        }
+        return out;
+    }
+
+    function segments(tiles, edge) {
+        const segs = [];
+        let cur = [];
+        const sorted = tiles.slice().sort((a, b) =>
+            (edge === "TOP" || edge === "BOTTOM") ? a.x - b.x : a.y - b.y
+        );
+        
+        for (const t of sorted) {
+            if (cur.length === 0) { 
+                cur.push(t); 
+                continue; 
+            }
+            
+            const prev = cur[cur.length - 1];
+            const cont = (edge === "TOP" || edge === "BOTTOM")
+                ? (t.x === prev.x + 1)
+                : (t.y === prev.y + 1);
+                
+            if (cont) {
+                cur.push(t);
+            } else {
+                segs.push(cur);
+                cur = [t];
+            }
+        }
+        if (cur.length) segs.push(cur);
+        return segs;
+    }
+
+    function project(p, edge, d) {
+        if (edge === "TOP")    return { x: p.x,     y: p.y + d };
+        if (edge === "BOTTOM") return { x: p.x,     y: p.y - d };
+        if (edge === "LEFT")   return { x: p.x + d, y: p.y     };
+        // RIGHT
+        return { x: p.x - d, y: p.y };
+    }
+
+    const walls = [];
+    let totalEntrances = 0;
+    let totalBookends = 0;
+
+    function handleEdge(edge) {
+        const pass = scanEdge(edge);
+        const segs = segments(pass, edge);
+        
+        totalEntrances += segs.length;
+        
+        for (const seg of segs) {
+            // endpoints of this entrance - bookend wall placement
+            const a0 = seg[0];
+            const b0 = seg[seg.length - 1];
+
+            // Skip single-tile entrances (already minimal)
+            if (seg.length === 1) continue;
+
+            // Extend to match curtain width (overhang each side)
+            const aExt = (edge === 'TOP' || edge === 'BOTTOM')
+                ? { x: Math.max(0, a0.x - ENTRANCE_OVERHANG_TILES), y: a0.y }
+                : { x: a0.x, y: Math.max(0, a0.y - ENTRANCE_OVERHANG_TILES) };
+            const bExt = (edge === 'TOP' || edge === 'BOTTOM')
+                ? { x: Math.min(49, b0.x + ENTRANCE_OVERHANG_TILES), y: b0.y }
+                : { x: b0.x, y: Math.min(49, b0.y + ENTRANCE_OVERHANG_TILES) };
+
+            // Try to place each bookend independently with fallback depths 1 then 2
+            const sides = [aExt, bExt];
+            for (const base of sides) {
+                for (const d of [1, 2]) {
+                    const p = project(base, edge, d);
+                    if (!isUnbuildable(p.x, p.y)) {
+                        walls.push(p);
+                        totalBookends += 1;
+                        break; // done with this side
+                    }
+                }
+            }
+        }
+    }
+
+    handleEdge("TOP");
+    handleEdge("BOTTOM");
+    handleEdge("LEFT");
+    handleEdge("RIGHT");
+
+    // Deduplicate walls
+    const seen = new Set();
+    const out = [];
+    for (const w of walls) {
+        const key = w.x + ',' + w.y;
+        if (!seen.has(key)) {
+            seen.add(key);
+            out.push(w);
+        }
+    }
+    
+    console.log(`🛡️ Bookend wall planning: Found ${totalEntrances} entrances, planned ${totalBookends} bookend walls (${out.length} after deduplication)`);
+    
+    return out;
+}
+
+function buildPlannedEdgeSeal(room, precomputedPlan) {
+    const plan = precomputedPlan || planMinimalEdgeSeal(room);
+    const stamp = [[0, 0, STRUCTURE_WALL]];
+    const seen = new Set();
+    
+    let newWallsPlanned = 0;
+
+    for (const pos of plan) {
+        const key = pos.x + ':' + pos.y;
+        if (seen.has(key)) continue;
+        seen.add(key);
+
+        addStampToPlannedStructures(room, { x: pos.x, y: pos.y }, stamp);
+
+        const look = room.lookAt(pos.x, pos.y);
+        let hasWallOrSite = false;
+        for (const o of look) {
+            if (o.type === LOOK_STRUCTURES && o.structure && o.structure.structureType === STRUCTURE_WALL) {
+                hasWallOrSite = true;
+                break;
+            }
+            if (o.type === LOOK_CONSTRUCTION_SITES && o.constructionSite && o.constructionSite.structureType === STRUCTURE_WALL) {
+                hasWallOrSite = true;
+                break;
+            }
+        }
+        if (!hasWallOrSite) {
+            room.createConstructionSite(pos.x, pos.y, STRUCTURE_WALL);
+            newWallsPlanned++;
+        }
+    }
+    
+    if (newWallsPlanned > 0) {
+        console.log(`🛡️ BOOKEND WALLS: Planned ${newWallsPlanned} bookend walls (${plan.length} total positions)`);
+    }
+}
+
+/**
+ * Plan interior curtains across each entrance with a center rampart gate.
+ * Pattern per entrance (top edge example):
+ * - Bookends already at y=1 (handled elsewhere)
+ * - Curtain of walls at y=2 from first to last entrance x
+ * - Single center tile is a RAMPART (friendly passage)
+ */
+function planEntranceCurtains(room) {
+    const terrain = room.getTerrain();
+
+    function passable(x, y) { return terrain.get(x, y) !== TERRAIN_MASK_WALL; }
+    function inBounds(x, y) { return x >= 1 && x <= 48 && y >= 1 && y <= 48; }
+
+    function scanEdge(edge) {
+        const tiles = [];
+        if (edge === 'TOP') {
+            for (let x = 0; x < 50; x++) if (passable(x, 0)) tiles.push({ x, y: 0 });
+        } else if (edge === 'BOTTOM') {
+            for (let x = 0; x < 50; x++) if (passable(x, 49)) tiles.push({ x, y: 49 });
+        } else if (edge === 'LEFT') {
+            for (let y = 0; y < 50; y++) if (passable(0, y)) tiles.push({ x: 0, y });
+        } else if (edge === 'RIGHT') {
+            for (let y = 0; y < 50; y++) if (passable(49, y)) tiles.push({ x: 49, y });
+        }
+        return tiles;
+    }
+
+    function segments(tiles, edge) {
+        const segs = [];
+        let cur = [];
+        const sorted = tiles.slice().sort((a, b) => (edge === 'TOP' || edge === 'BOTTOM') ? a.x - b.x : a.y - b.y);
+        for (const t of sorted) {
+            if (cur.length === 0) { cur.push(t); continue; }
+            const p = cur[cur.length - 1];
+            const cont = (edge === 'TOP' || edge === 'BOTTOM') ? (t.x === p.x + 1) : (t.y === p.y + 1);
+            if (cont) cur.push(t); else { segs.push(cur); cur = [t]; }
+        }
+        if (cur.length) segs.push(cur);
+        return segs;
+    }
+
+    function project(p, edge, d) {
+        if (edge === 'TOP') return { x: p.x, y: p.y + d };
+        if (edge === 'BOTTOM') return { x: p.x, y: p.y - d };
+        if (edge === 'LEFT') return { x: p.x + d, y: p.y };
+        return { x: p.x - d, y: p.y }; // RIGHT
+    }
+
+    const placements = [];
+
+    function addCurtains(edge) {
+        const segs = segments(scanEdge(edge), edge);
+        for (const seg of segs) {
+            if (seg.length < 2) continue; // ignore 1-tile entrances
+
+            // Center of original entrance for rampart gate
+            const centerIdx = Math.floor(seg.length / 2);
+            const centerBase = seg[centerIdx];
+
+            if (edge === 'TOP' || edge === 'BOTTOM') {
+                const yEdge = edge === 'TOP' ? 0 : 49;
+                const startX = Math.max(0, seg[0].x - ENTRANCE_OVERHANG_TILES); // extend before
+                const endX = Math.min(49, seg[seg.length - 1].x + ENTRANCE_OVERHANG_TILES); // extend after
+                for (let x = startX; x <= endX; x++) {
+                    const base = { x, y: yEdge };
+                    const pos = project(base, edge, ENTRANCE_CURTAIN_DEPTH);
+                    if (!inBounds(pos.x, pos.y)) continue;
+                    // Skip if projected tile is terrain wall
+                    if (terrain.get(pos.x, pos.y) === TERRAIN_MASK_WALL) continue;
+                    const isRampart = (x === centerBase.x);
+                    placements.push({ x: pos.x, y: pos.y, type: isRampart ? STRUCTURE_RAMPART : STRUCTURE_WALL });
+                }
+            } else {
+                const xEdge = edge === 'LEFT' ? 0 : 49;
+                const startY = Math.max(0, seg[0].y - ENTRANCE_OVERHANG_TILES);
+                const endY = Math.min(49, seg[seg.length - 1].y + ENTRANCE_OVERHANG_TILES);
+                for (let y = startY; y <= endY; y++) {
+                    const base = { x: xEdge, y };
+                    const pos = project(base, edge, ENTRANCE_CURTAIN_DEPTH);
+                    if (!inBounds(pos.x, pos.y)) continue;
+                    if (terrain.get(pos.x, pos.y) === TERRAIN_MASK_WALL) continue;
+                    const isRampart = (y === centerBase.y);
+                    placements.push({ x: pos.x, y: pos.y, type: isRampart ? STRUCTURE_RAMPART : STRUCTURE_WALL });
+                }
+            }
+        }
+    }
+
+    addCurtains('TOP');
+    addCurtains('BOTTOM');
+    addCurtains('LEFT');
+    addCurtains('RIGHT');
+
+    console.log(`🧱 Curtain planning: ${placements.length} tiles (walls + ramparts) across entrances`);
+    return placements;
+}
+
+function buildEntranceCurtains(room, plan) {
+    if (!plan || plan.length === 0) return;
+    let wallsPlanned = 0, rampartsPlanned = 0;
+
+    const seen = new Set();
+    const terrain = new Room.Terrain(room.name);
+    for (const item of plan) {
+        const key = item.x + ':' + item.y + ':' + item.type;
+        if (seen.has(key)) continue;
+        seen.add(key);
+
+        // Avoid planning on terrain walls entirely
+        if (terrain.get(item.x, item.y) === TERRAIN_MASK_WALL) continue;
+
+        // Record in planned structures
+        addStampToPlannedStructures(room, { x: item.x, y: item.y }, [[0, 0, item.type]]);
+
+        // Create construction site if not already present
+        const look = room.lookAt(item.x, item.y);
+        let exists = false;
+        for (const o of look) {
+            if (o.type === LOOK_STRUCTURES && o.structure && o.structure.structureType === item.type) { exists = true; break; }
+            if (o.type === LOOK_CONSTRUCTION_SITES && o.constructionSite && o.constructionSite.structureType === item.type) { exists = true; break; }
+        }
+        if (!exists) {
+            const res = room.createConstructionSite(item.x, item.y, item.type);
+            if (res === OK) {
+                if (item.type === STRUCTURE_WALL) wallsPlanned++; else rampartsPlanned++;
+            }
+        }
+    }
+    if (wallsPlanned || rampartsPlanned) {
+        console.log(`🧱 Curtains: planned ${wallsPlanned} walls and ${rampartsPlanned} ramparts`);
     }
 }
 
@@ -1492,7 +1514,6 @@ function createMissingConstructionSites(room) {
             STRUCTURE_TOWER,
             STRUCTURE_CONTAINER,
             STRUCTURE_WALL,
-            STRUCTURE_RAMPART,
             STRUCTURE_ROAD,
             STRUCTURE_LINK,
             STRUCTURE_TERMINAL
@@ -1521,7 +1542,6 @@ function createMissingConstructionSites(room) {
     });
     
     let created = 0;
-    let rampartCount = 0;
     let totalPlanned = 0;
     let extensionsCreated = 0;
     let roadsSkipped = 0;
@@ -1542,9 +1562,6 @@ function createMissingConstructionSites(room) {
         
         // Skip structures not allowed at current RCL
         if (!allowedStructures.includes(planned.type)) {
-            if (planned.type === STRUCTURE_RAMPART) {
-                rampartCount++;
-            }
             continue;
         }
         
@@ -1590,8 +1607,6 @@ function createMissingConstructionSites(room) {
                     created++;
                     if (planned.type === STRUCTURE_ROAD) {
                         console.log(`✅ Created road construction site at (${pos.x},${pos.y}) - after ${existingExtensions} extensions built`);
-                    } else if (planned.type === STRUCTURE_RAMPART) {
-                        console.log(`✅ Created rampart construction site at (${pos.x},${pos.y})`);
                     }
                 } else {
                     console.log(`❌ Failed to create ${planned.type} at (${pos.x},${pos.y}): ${result}`);
@@ -1604,7 +1619,7 @@ function createMissingConstructionSites(room) {
     }
     
     if (created > 0) {
-        console.log(`🏗️ Created ${created} construction sites (${extensionsCreated} extensions prioritized, ${rampartCount} ramparts waiting for RCL 2+)`);
+        console.log(`🏗️ Created ${created} construction sites (${extensionsCreated} extensions prioritized)`);
     }
     if (roadsSkipped > 0) {
         console.log(`🛣️ Skipped ${roadsSkipped} roads - building extensions first (need ${5 - existingExtensions} more extensions and ${1 - existingContainers} more containers)`);
@@ -1624,8 +1639,8 @@ function getMaxStructuresByRCL(rcl, structureType) {
         [STRUCTURE_EXTENSION]: [0, 5, 10, 20, 30, 40, 50, 60, 60][rcl] || 0,
         [STRUCTURE_ROAD]: 2500, // Effectively unlimited for our purposes
         [STRUCTURE_CONTAINER]: [0, 5, 5, 5, 5, 5, 5, 5, 5][rcl] || 0,
-        [STRUCTURE_RAMPART]: [0, 0, 3000, 3000, 3000, 3000, 3000, 3000, 3000][rcl] || 0,
         [STRUCTURE_WALL]: [0, 0, 3000, 3000, 3000, 3000, 3000, 3000, 3000][rcl] || 0,
+        [STRUCTURE_RAMPART]: [0, 0, 3000, 3000, 3000, 3000, 3000, 3000, 3000][rcl] || 0,
         [STRUCTURE_TOWER]: [0, 0, 0, 1, 1, 2, 2, 3, 6][rcl] || 0,
         [STRUCTURE_STORAGE]: [0, 0, 0, 0, 1, 1, 1, 1, 1][rcl] || 0,
         [STRUCTURE_LINK]: [0, 0, 0, 0, 0, 2, 3, 4, 6][rcl] || 0,
@@ -1644,19 +1659,19 @@ function getAllowedStructuresByRCL(rcl) {
         case 1:
             return [...baseStructures];
         case 2:
-            return [...baseStructures, STRUCTURE_RAMPART, STRUCTURE_WALL];
+            return [...baseStructures, STRUCTURE_WALL, STRUCTURE_RAMPART];
         case 3:
-            return [...baseStructures, STRUCTURE_RAMPART, STRUCTURE_WALL, STRUCTURE_TOWER];
+            return [...baseStructures, STRUCTURE_WALL, STRUCTURE_RAMPART, STRUCTURE_TOWER];
         case 4:
-            return [...baseStructures, STRUCTURE_RAMPART, STRUCTURE_WALL, STRUCTURE_TOWER, STRUCTURE_STORAGE];
+            return [...baseStructures, STRUCTURE_WALL, STRUCTURE_RAMPART, STRUCTURE_TOWER, STRUCTURE_STORAGE];
         case 5:
-            return [...baseStructures, STRUCTURE_RAMPART, STRUCTURE_WALL, STRUCTURE_TOWER, STRUCTURE_STORAGE, STRUCTURE_LINK];
+            return [...baseStructures, STRUCTURE_WALL, STRUCTURE_RAMPART, STRUCTURE_TOWER, STRUCTURE_STORAGE, STRUCTURE_LINK];
         case 6:
-            return [...baseStructures, STRUCTURE_RAMPART, STRUCTURE_WALL, STRUCTURE_TOWER, STRUCTURE_STORAGE, STRUCTURE_LINK, STRUCTURE_EXTRACTOR, STRUCTURE_LAB];
+            return [...baseStructures, STRUCTURE_WALL, STRUCTURE_RAMPART, STRUCTURE_TOWER, STRUCTURE_STORAGE, STRUCTURE_LINK, STRUCTURE_EXTRACTOR, STRUCTURE_LAB];
         case 7:
-            return [...baseStructures, STRUCTURE_RAMPART, STRUCTURE_WALL, STRUCTURE_TOWER, STRUCTURE_STORAGE, STRUCTURE_LINK, STRUCTURE_EXTRACTOR, STRUCTURE_LAB, STRUCTURE_FACTORY];
+            return [...baseStructures, STRUCTURE_WALL, STRUCTURE_RAMPART, STRUCTURE_TOWER, STRUCTURE_STORAGE, STRUCTURE_LINK, STRUCTURE_EXTRACTOR, STRUCTURE_LAB, STRUCTURE_FACTORY];
         case 8:
-            return [...baseStructures, STRUCTURE_RAMPART, STRUCTURE_WALL, STRUCTURE_TOWER, STRUCTURE_STORAGE, STRUCTURE_LINK, STRUCTURE_EXTRACTOR, STRUCTURE_LAB, STRUCTURE_FACTORY, STRUCTURE_TERMINAL, STRUCTURE_OBSERVER, STRUCTURE_POWER_SPAWN, STRUCTURE_NUKER];
+            return [...baseStructures, STRUCTURE_WALL, STRUCTURE_RAMPART, STRUCTURE_TOWER, STRUCTURE_STORAGE, STRUCTURE_LINK, STRUCTURE_EXTRACTOR, STRUCTURE_LAB, STRUCTURE_FACTORY, STRUCTURE_TERMINAL, STRUCTURE_OBSERVER, STRUCTURE_POWER_SPAWN, STRUCTURE_NUKER];
         default:
             return baseStructures;
     }
@@ -1737,9 +1752,9 @@ function visualizeBasePlan(room) {
         [STRUCTURE_TOWER]: '#FF8E53',
         [STRUCTURE_ROAD]: '#555555',
         [STRUCTURE_LINK]: '#9B59B6',
-        [STRUCTURE_TERMINAL]: '#2287e6ff',
-        [STRUCTURE_RAMPART]: '#2ECC71',
-        [STRUCTURE_WALL]: '#95A5A6'
+    [STRUCTURE_TERMINAL]: '#2287e6ff',
+        [STRUCTURE_WALL]: '#95A5A6',
+        [STRUCTURE_RAMPART]: '#2ecc71'
     };
             
     // Visualize planned structures
@@ -1800,16 +1815,16 @@ function visualizeBasePlan(room) {
                 opacity: hasStructure ? 0.9 : 0.5
             });
         }
-        
         // Special visualization for ramparts
         if (planned.type === STRUCTURE_RAMPART) {
-            visual.rect(planned.x - 0.3, planned.y - 0.3, 0.6, 0.6, {
+            visual.rect(planned.x - 0.45, planned.y - 0.45, 0.9, 0.9, {
                 fill: 'transparent',
                 stroke: color,
-                strokeWidth: 0.1,
-                opacity: hasStructure ? 0.8 : 0.4
+                strokeWidth: 0.15,
+                opacity: 0.8
             });
         }
+        
     });
     
         
@@ -1832,10 +1847,10 @@ function visualizeBasePlan(room) {
         { color: '#FFE56D', text: 'Extensions' },
         { color: '#4ECDC4', text: 'Containers' },
         { color: '#FF8E53', text: 'Towers' },
-        { color: '#555555', text: 'Roads' },
-        { color: '#FF6B6B', text: 'Storage' },
-        { color: '#2ECC71', text: 'Ramparts' },
+    { color: '#555555', text: 'Roads' },
+    { color: '#FF6B6B', text: 'Storage' },
         { color: '#95A5A6', text: 'Walls' },
+        { color: '#2ecc71', text: 'Rampart (gate)' },
         { color: '#9B59B6', text: 'Links' },
         { color: '#2287e6ff', text: 'Terminal' }
     ];
@@ -2193,43 +2208,43 @@ function getDistributedEnergyContainer(creep, targets) {
         if (creep.memory.assignedSource) {
             const assignedSource = Game.getObjectById(creep.memory.assignedSource);
             if (assignedSource) {
-                // Find container near this assigned source
                 const assignedContainer = sourceContainers.find(container => 
                     container.pos.getRangeTo(assignedSource) <= 2
                 );
-                
                 if (assignedContainer) {
-                    // Valid assignment - return the container (even if empty)
                     return assignedContainer;
-                } else {
-                    // No container near assigned source - distribute among available containers based on assigned source
-                    const sourceIndex = sources.findIndex(s => s.id === creep.memory.assignedSource);
-                    const containerIndex = sourceIndex % sourceContainers.length;
-                    return sourceContainers[containerIndex];
                 }
             } else {
-                // Assigned source no longer exists, clear assignment
                 delete creep.memory.assignedSource;
             }
         }
-        
-        // No assignment or assignment was cleared - always assign one
-        
-        // Find source with least assigned creeps across ALL energy-gathering roles
+
+        const leastUsedSource = getLeastUtilizedSource(creep.room);
+        if (leastUsedSource) {
+            const leastUsedContainer = sourceContainers.find(container => 
+                container.pos.getRangeTo(leastUsedSource) <= 2
+            );
+            if (leastUsedContainer) {
+                creep.memory.assignedSource = leastUsedSource.id;
+                return leastUsedContainer;
+            }
+        }
+
+        // Fallback: distribute using current role assignments if no container matched least-used source
         const energyGatheringCreeps = _.filter(Game.creeps, c => 
-            c.memory.role === 'hauler' && 
+            (c.memory.role === 'hauler' || c.memory.role === 'builder' || c.memory.role === 'upgrader') &&
             c.name !== creep.name
         );
         const sourceAssignments = {};
-        
+
         for (const source of sources) {
             sourceAssignments[source.id] = energyGatheringCreeps.filter(c => c.memory.assignedSource === source.id).length;
         }
-        
+
         let bestSource = null;
         let leastAssigned = 999;
         let bestContainer = null;
-        
+
         for (const container of sourceContainers) {
             for (const source of sources) {
                 if (container.pos.getRangeTo(source) <= 2) {
@@ -2242,11 +2257,11 @@ function getDistributedEnergyContainer(creep, targets) {
                 }
             }
         }
-        
+
         if (bestSource) {
             creep.memory.assignedSource = bestSource.id;
         }
-        
+
         return bestContainer;
     }
     
@@ -2316,23 +2331,15 @@ function runUpgrader(creep) {
 function manageDefenseHitPoints(room) {
     const rcl = room.controller.level;
     const wallTargetHits = WALL_TARGET_HITS[rcl] || WALL_TARGET_HITS[1];
-    const rampartTargetHits = RAMPART_TARGET_HITS[rcl] || RAMPART_TARGET_HITS[1];
     
-    // Check walls
     const walls = room.find(FIND_STRUCTURES, {
         filter: (structure) => structure.structureType === STRUCTURE_WALL
     });
-    
-    // Check ramparts
-    const ramparts = room.find(FIND_STRUCTURES, {
-        filter: (structure) => structure.structureType === STRUCTURE_RAMPART
-    });
-    
-    // Count status for walls
+
     let wallsBelowTarget = 0;
     let wallsAtTarget = 0;
     let wallsCritical = 0;
-    
+
     walls.forEach(wall => {
         if (wall.hits < wallTargetHits) {
             wallsBelowTarget++;
@@ -2343,27 +2350,9 @@ function manageDefenseHitPoints(room) {
             wallsAtTarget++;
         }
     });
-    
-    // Count status for ramparts
-    let rampartsBelowTarget = 0;
-    let rampartsAtTarget = 0;
-    let rampartsCritical = 0;
-    
-    ramparts.forEach(rampart => {
-        if (rampart.hits < rampartTargetHits) {
-            rampartsBelowTarget++;
-            if (rampart.hits < rampartTargetHits * 0.2) {
-                rampartsCritical++;
-            }
-        } else {
-            rampartsAtTarget++;
-        }
-    });
-    
-    // Log defense status every 50 ticks for monitoring
-    if (Game.time % 50 === 0 && (walls.length > 0 || ramparts.length > 0)) {
+
+    if (Game.time % 50 === 0 && walls.length > 0) {
         console.log(`🛡️ Walls (RCL ${rcl}, target: ${wallTargetHits.toLocaleString()}): ${wallsAtTarget} at target, ${wallsBelowTarget} need repair (${wallsCritical} critical)`);
-        console.log(`🚪 Rampart gates (target: ${rampartTargetHits.toLocaleString()}): ${rampartsAtTarget} at target, ${rampartsBelowTarget} need repair (${rampartsCritical} critical)`);
     }
 }
 
@@ -2424,7 +2413,6 @@ function getSharedConstructionTarget(room) {
         STRUCTURE_TOWER,
         STRUCTURE_CONTAINER,
         STRUCTURE_WALL,
-        STRUCTURE_RAMPART,
         STRUCTURE_ROAD,
         STRUCTURE_LINK,
         STRUCTURE_TERMINAL
@@ -2480,43 +2468,31 @@ function getSharedConstructionTarget(room) {
 function getDefensesNeedingRepair(room) {
     const rcl = room.controller.level;
     const wallTargetHits = WALL_TARGET_HITS[rcl] || WALL_TARGET_HITS[1];
-    const rampartTargetHits = RAMPART_TARGET_HITS[rcl] || RAMPART_TARGET_HITS[1];
     
-    // Find walls needing repair
-    const walls = room.find(FIND_STRUCTURES, {
+    // Find walls and ramparts needing repair
+    const defenses = room.find(FIND_STRUCTURES, {
         filter: (structure) => {
-            return structure.structureType === STRUCTURE_WALL && 
+            return (structure.structureType === STRUCTURE_WALL || structure.structureType === STRUCTURE_RAMPART) &&
                    structure.hits < wallTargetHits;
         }
     });
-    
-    // Find ramparts needing repair
-    const ramparts = room.find(FIND_STRUCTURES, {
-        filter: (structure) => {
-            return structure.structureType === STRUCTURE_RAMPART && 
-                   structure.hits < rampartTargetHits;
-        }
-    });
-    
-    // Combine and sort by most urgent (lowest hit % compared to target)
-    const allDefenses = [
-        ...walls.map(wall => ({ structure: wall, targetHits: wallTargetHits, type: 'wall' })),
-        ...ramparts.map(rampart => ({ structure: rampart, targetHits: rampartTargetHits, type: 'rampart' }))
-    ];
-    
-    return allDefenses.sort((a, b) => {
-        const aPercent = a.structure.hits / a.targetHits;
-        const bPercent = b.structure.hits / b.targetHits;
-        return aPercent - bPercent;
-    }).map(item => item.structure);
+
+    return defenses
+        .map(def => ({ structure: def, targetHits: wallTargetHits }))
+        .sort((a, b) => {
+            const aPercent = a.structure.hits / a.targetHits;
+            const bPercent = b.structure.hits / b.targetHits;
+            return aPercent - bPercent;
+        })
+        .map(item => item.structure);
 }
 
 function getStructuresNeedingRepair(room) {
     // Find all structures that are significantly damaged (below 80% of max hits)
     const damagedStructures = room.find(FIND_STRUCTURES, {
         filter: (structure) => {
-            // Skip walls and ramparts (handled separately by getDefensesNeedingRepair)
-            if (structure.structureType === STRUCTURE_WALL || structure.structureType === STRUCTURE_RAMPART) {
+            // Skip walls (handled separately by getDefensesNeedingRepair)
+            if (structure.structureType === STRUCTURE_WALL) {
                 return false;
             }
             // Skip structures that are already at full health
@@ -2555,7 +2531,7 @@ function runBuilder(creep) {
         
         // If no assigned target, find a new one - prioritize defense repairs
         if (!target) {
-            // First priority: Walls and ramparts needing repair
+            // First priority: Walls needing repair
             const defensesNeedingRepair = getDefensesNeedingRepair(creep.room);
             if (defensesNeedingRepair.length > 0) {
                 target = creep.pos.findClosestByPath(defensesNeedingRepair);
@@ -2591,14 +2567,8 @@ function runBuilder(creep) {
                 // Check if repair target is now at target hits
                 if (isRepairTask) {
                     const rcl = creep.room.controller.level;
-                    let targetHits;
-                    if (target.structureType === STRUCTURE_WALL) {
-                        targetHits = WALL_TARGET_HITS[rcl] || WALL_TARGET_HITS[1];
-                    } else if (target.structureType === STRUCTURE_RAMPART) {
-                        targetHits = RAMPART_TARGET_HITS[rcl] || RAMPART_TARGET_HITS[1];
-                    }
-                    
-                    if (targetHits && target.hits >= targetHits) {
+                    const targetHits = WALL_TARGET_HITS[rcl] || WALL_TARGET_HITS[1];
+                    if (target.structureType === STRUCTURE_WALL && target.hits >= targetHits) {
                         // Defense structure is now at target level, clear assignment
                         delete creep.memory.buildTarget;
                         delete creep.memory.isRepairTask;
