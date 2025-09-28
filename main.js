@@ -1570,7 +1570,8 @@ function createMissingConstructionSites(room) {
                         const distance = spawn.pos.getRangeTo(pos.x, pos.y);
                         console.log(`✅ PRIORITY: Created extension construction site at (${pos.x},${pos.y}) - distance ${distance} from spawn`);
                     }
-                } else {
+                } else if (result !== ERR_RCL_NOT_ENOUGH) {
+                    // Only log errors that aren't RCL-related spam
                     console.log(`❌ Failed to create ${planned.type} at (${pos.x},${pos.y}): ${result}`);
                 }
             } else {
@@ -1581,7 +1582,8 @@ function createMissingConstructionSites(room) {
                     if (planned.type === STRUCTURE_ROAD) {
                         console.log(`✅ Created road construction site at (${pos.x},${pos.y}) - after ${existingExtensions} extensions built`);
                     }
-                } else {
+                } else if (result !== ERR_RCL_NOT_ENOUGH) {
+                    // Only log errors that aren't RCL-related spam
                     console.log(`❌ Failed to create ${planned.type} at (${pos.x},${pos.y}): ${result}`);
                 }
             }
