@@ -142,9 +142,6 @@ function planBase(room) {
     room.memory.plannedStructures = [];
     room.memory.baseCenter = null;
     
-    // Calculate distance transform for optimal placement
-    const distanceTransform = calculateDistanceTransform(room);
-    
     // Find best anchor position using distance transform
     const anchor = findOptimalAnchor(room, controller, spawn);
     if (!anchor) {
@@ -166,11 +163,11 @@ function planBase(room) {
     // Place controller stamp (container + roads)
     placeControllerStamp(room, controller, anchor);
     
-    // Use distance transform to optimally place extension fields near spawn
-    placeExtensionFieldsOptimal(room, spawn, distanceTransform);
+    // Place extension fields near spawn
+    placeExtensionFieldsOptimal(room, spawn);
     
-    // Use distance transform to optimally place tower clusters near spawn
-    placeDefenseStampsOptimal(room, spawn, distanceTransform);
+    // Place tower clusters for better defense coverage
+    placeDefenseStampsOptimal(room, spawn);
         
     // Connect everything with roads
     planRoadNetwork(room, anchor, sources, controller);
@@ -189,68 +186,7 @@ function planBase(room) {
     console.log(`Base planned with ${room.memory.plannedStructures.length} structures`);
 }
 
-// Calculate distance transform for the entire room
-function calculateDistanceTransform(room) {
-    const terrain = new Room.Terrain(room.name);
-    const distanceMatrix = new PathFinder.CostMatrix();
-    
-    // Initialize all positions
-    for (let x = 0; x < 50; x++) {
-        for (let y = 0; y < 50; y++) {
-            if (terrain.get(x, y) === TERRAIN_MASK_WALL) {
-                distanceMatrix.set(x, y, 0);
-            } else {
-                distanceMatrix.set(x, y, 255); // Max distance initially
-            }
-        }
-    }
-    
-    // Multi-pass distance transform
-    let changed = true;
-    while (changed) {
-        changed = false;
-        
-        // Forward pass
-        for (let x = 1; x < 49; x++) {
-            for (let y = 1; y < 49; y++) {
-                if (terrain.get(x, y) !== TERRAIN_MASK_WALL) {
-                    const current = distanceMatrix.get(x, y);
-                    const newDist = Math.min(
-                        distanceMatrix.get(x - 1, y) + 1,
-                        distanceMatrix.get(x, y - 1) + 1,
-                        distanceMatrix.get(x - 1, y - 1) + 1,
-                        current
-                    );
-                    if (newDist < current) {
-                        distanceMatrix.set(x, y, newDist);
-                        changed = true;
-                    }
-                }
-            }
-        }
-        
-        // Backward pass
-        for (let x = 48; x >= 1; x--) {
-            for (let y = 48; y >= 1; y--) {
-                if (terrain.get(x, y) !== TERRAIN_MASK_WALL) {
-                    const current = distanceMatrix.get(x, y);
-                    const newDist = Math.min(
-                        distanceMatrix.get(x + 1, y) + 1,
-                        distanceMatrix.get(x, y + 1) + 1,
-                        distanceMatrix.get(x + 1, y + 1) + 1,
-                        current
-                    );
-                    if (newDist < current) {
-                        distanceMatrix.set(x, y, newDist);
-                        changed = true;
-                    }
-                }
-            }
-        }
-    }
-    
-    return distanceMatrix;
-}
+
 
 // Distance transform to find best anchor position
 function findOptimalAnchor(room, controller, spawn) {
@@ -343,8 +279,8 @@ function placeCoreStamp(room, spawn) {
 
 
 
-// Optimal extension field placement using distance transform
-function placeExtensionFieldsOptimal(room, spawn, distanceTransform) {
+// Optimal extension field placement
+function placeExtensionFieldsOptimal(room, spawn) {
     const extensionStamp = [
         // Extensions first to prevent roads underneath
         [0, -1, STRUCTURE_EXTENSION], // Top
@@ -356,12 +292,29 @@ function placeExtensionFieldsOptimal(room, spawn, distanceTransform) {
     
     const spawnPos = spawn.pos;
     const candidatePositions = [];
+    const terrain = new Room.Terrain(room.name);
     
     // Find candidate positions within reasonable distance of spawn
     for (let x = Math.max(5, spawnPos.x - 15); x <= Math.min(44, spawnPos.x + 15); x++) {
         for (let y = Math.max(5, spawnPos.y - 15); y <= Math.min(44, spawnPos.y + 15); y++) {
             const distanceFromSpawn = Math.max(Math.abs(x - spawnPos.x), Math.abs(y - spawnPos.y));
-            const wallDistance = distanceTransform.get(x, y);
+            
+            // Check distance to walls - simple validation
+            let wallDistance = 5; // Default safe distance
+            for (let dx = -3; dx <= 3; dx++) {
+                for (let dy = -3; dy <= 3; dy++) {
+                    const checkX = x + dx;
+                    const checkY = y + dy;
+                    if (checkX >= 0 && checkX < 50 && checkY >= 0 && checkY < 50) {
+                        if (terrain.get(checkX, checkY) === TERRAIN_MASK_WALL) {
+                            const dist = Math.max(Math.abs(dx), Math.abs(dy));
+                            if (dist < wallDistance) {
+                                wallDistance = dist;
+                            }
+                        }
+                    }
+                }
+            }
             
             // Good positions: close to spawn, far from walls, can fit stamp
             if (distanceFromSpawn >= 3 && distanceFromSpawn <= 12 && wallDistance >= 3) {
@@ -430,54 +383,9 @@ function placeExtensionFieldsOptimal(room, spawn, distanceTransform) {
     }
 }
 
-// Source stamps: Container + access roads
-function placeSourceStamp(room, source) {
-    const sourceStamp = [
-        [0, 0, STRUCTURE_CONTAINER]
-    ];
-    
-    // Find best position adjacent to source
-    const positions = [
-        { x: source.pos.x - 1, y: source.pos.y },
-        { x: source.pos.x + 1, y: source.pos.y },
-        { x: source.pos.x, y: source.pos.y - 1 },
-        { x: source.pos.x, y: source.pos.y + 1 }
-    ];
-    
-    for (const pos of positions) {
-        if (isValidStampPosition(room, pos, sourceStamp)) {
-            addStampToPlannedStructures(room, pos, sourceStamp);
-            break;
-        }
-    }
-}
-
-// Controller stamp: Container for upgraders
-function placeControllerStamp(room, controller, anchor) {
-    const controllerStamp = [
-        [0, 0, STRUCTURE_CONTAINER]
-    ];
-    
-    // Find position 2-3 tiles from controller, towards base
-    const direction = {
-        x: anchor.x > controller.pos.x ? 1 : -1,
-        y: anchor.y > controller.pos.y ? 1 : -1
-    };
-    
-    const containerPos = {
-        x: controller.pos.x + direction.x * 2,
-        y: controller.pos.y + direction.y * 2
-    };
-    
-    if (isValidStampPosition(room, containerPos, controllerStamp)) {
-        addStampToPlannedStructures(room, containerPos, controllerStamp);
-    }
-}
-
-
 
 // Optimal turret cluster placement using distance transform
-function placeDefenseStampsOptimal(room, spawn, distanceTransform) {
+function placeDefenseStampsOptimal(room, spawn) {
     // Define a condensed 2x2 turret cluster with a surrounding road border
     const turretClusterStamp = [
         // 4 Turrets first to prevent roads underneath
@@ -486,6 +394,7 @@ function placeDefenseStampsOptimal(room, spawn, distanceTransform) {
     ];
     
     const spawnPos = spawn.pos;
+    const terrain = new Room.Terrain(room.name);
     let bestPosition = null;
     let bestScore = 0;
     
@@ -493,7 +402,23 @@ function placeDefenseStampsOptimal(room, spawn, distanceTransform) {
     for (let x = Math.max(5, spawnPos.x - 10); x <= Math.min(44, spawnPos.x + 10); x++) {
         for (let y = Math.max(5, spawnPos.y - 10); y <= Math.min(44, spawnPos.y + 10); y++) {
             const distanceFromSpawn = Math.max(Math.abs(x - spawnPos.x), Math.abs(y - spawnPos.y));
-            const wallDistance = distanceTransform.get(x, y);
+            
+            // Check distance to walls - simple validation
+            let wallDistance = 5; // Default safe distance
+            for (let dx = -3; dx <= 3; dx++) {
+                for (let dy = -3; dy <= 3; dy++) {
+                    const checkX = x + dx;
+                    const checkY = y + dy;
+                    if (checkX >= 0 && checkX < 50 && checkY >= 0 && checkY < 50) {
+                        if (terrain.get(checkX, checkY) === TERRAIN_MASK_WALL) {
+                            const dist = Math.max(Math.abs(dx), Math.abs(dy));
+                            if (dist < wallDistance) {
+                                wallDistance = dist;
+                            }
+                        }
+                    }
+                }
+            }
             
             // Favor positions with a medium distance from spawn and far from walls
             if (distanceFromSpawn >= 4 && distanceFromSpawn <= 8 && wallDistance >= 3) {
@@ -566,6 +491,54 @@ function isTurretClusterValidDistance(room, anchor, stamp) {
     
     return true; // All turrets maintain proper distance for creep pathfinding
 }
+function placeSourceStamp(room, source) {
+    const sourceStamp = [
+        [0, 0, STRUCTURE_CONTAINER]
+    ];
+    
+    // Find best position adjacent to source
+    const positions = [
+        { x: source.pos.x - 1, y: source.pos.y },
+        { x: source.pos.x + 1, y: source.pos.y },
+        { x: source.pos.x, y: source.pos.y - 1 },
+        { x: source.pos.x, y: source.pos.y + 1 }
+    ];
+    
+    for (const pos of positions) {
+        if (isValidStampPosition(room, pos, sourceStamp)) {
+            addStampToPlannedStructures(room, pos, sourceStamp);
+            break;
+        }
+    }
+}
+
+// Controller stamp: Container for upgraders
+function placeControllerStamp(room, controller, anchor) {
+    const controllerStamp = [
+        [0, 0, STRUCTURE_CONTAINER]
+    ];
+    
+    // Find position 2-3 tiles from controller, towards base
+    const direction = {
+        x: anchor.x > controller.pos.x ? 1 : -1,
+        y: anchor.y > controller.pos.y ? 1 : -1
+    };
+    
+    const containerPos = {
+        x: controller.pos.x + direction.x * 2,
+        y: controller.pos.y + direction.y * 2
+    };
+    
+    if (isValidStampPosition(room, containerPos, controllerStamp)) {
+        addStampToPlannedStructures(room, containerPos, controllerStamp);
+    }
+}
+
+
+
+
+
+
 
 
 
@@ -2511,6 +2484,8 @@ function getStructuresNeedingRepair(room) {
         return aPercent - bPercent;
     });
 }
+
+
 
 function runBuilder(creep) {
     // If creep has energy, prioritize repairs then building
