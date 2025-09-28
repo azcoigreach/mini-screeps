@@ -31,17 +31,20 @@ const VISUALIZE_BASE = true; // Set to false to disable base plan visualization
 const ENTRANCE_CURTAIN_DEPTH = 2;
 const ENTRANCE_OVERHANG_TILES = 2; // curtain and book-ends extend this many tiles beyond the entrance ends
 
-// Wall maintenance configuration - hit points by RCL
+// Wall and rampart maintenance configuration - hit points by RCL
 const WALL_TARGET_HITS = {
     1: 1000,        // RCL 1: Basic protection (1K hits)
     2: 10000,       // RCL 2: Light fortification (10K hits)
     3: 30000,       // RCL 3: Medium fortification (30K hits)
     4: 100000,      // RCL 4: Strong fortification (100K hits)
-    5: 100000,      // RCL 5: Strong fortification (100K hits)
-    6: 100000,      // RCL 6: Strong fortification (100K hits)
-    7: 100000,      // RCL 7: Strong fortification (100K hits)
-    8: 100000       // RCL 8: Strong fortification (100K hits)
+    5: 300000,      // RCL 5: Strong fortification (300K hits)
+    6: 1000000,     // RCL 6: Strong fortification (1M hits)
+    7: 3000000,     // RCL 7: Strong fortification (3M hits)
+    8: 10000000     // RCL 8: Strong fortification (10M hits)
 };
+
+// Ramparts use the same hit point targets as walls
+const RAMPART_TARGET_HITS = WALL_TARGET_HITS;
 
 module.exports.loop = function () {
     // Clean up memory
@@ -72,8 +75,13 @@ module.exports.loop = function () {
 
     // Plan base layout once
     if (!room.memory.basePlanned) {
-        planBase(room);
+        // Set flag immediately to prevent multiple executions
         room.memory.basePlanned = true;
+        planBase(room);
+        
+        // Create initial defensive structures immediately to ensure they get built
+        // (other structures can wait for regular construction cycle)
+        createInitialDefensiveStructures(room);
     }
 
     // Create construction sites less frequently - only every 20 ticks instead of 5
@@ -138,9 +146,13 @@ function planBase(room) {
     const spawn = room.find(FIND_MY_SPAWNS)[0];
     const sources = room.find(FIND_SOURCES);
     
-    // Initialize base planning storage
-    room.memory.plannedStructures = [];
-    room.memory.baseCenter = null;
+    // Initialize base planning storage - only if not already initialized
+    if (!room.memory.plannedStructures) {
+        room.memory.plannedStructures = [];
+    }
+    if (!room.memory.baseCenter) {
+        room.memory.baseCenter = null;
+    }
     
     // Find best anchor position using distance transform
     const anchor = findOptimalAnchor(room, controller, spawn);
@@ -184,6 +196,13 @@ function planBase(room) {
     buildEntranceCurtains(room, entranceCurtainPlan);
     
     console.log(`Base planned with ${room.memory.plannedStructures.length} structures`);
+    
+    // Debug: Count planned defensive structures
+    const wallsPlanned = room.memory.plannedStructures.filter(s => s.type === STRUCTURE_WALL).length;
+    const rampartsPlanned = room.memory.plannedStructures.filter(s => s.type === STRUCTURE_RAMPART).length;
+    if (wallsPlanned > 0 || rampartsPlanned > 0) {
+        console.log(`🛡️ Planned defenses: ${wallsPlanned} walls, ${rampartsPlanned} ramparts`);
+    }
 }
 
 
@@ -961,24 +980,9 @@ function buildPlannedEdgeSeal(room, precomputedPlan) {
         if (seen.has(key)) continue;
         seen.add(key);
 
+        // Only add to planned structures - let createMissingConstructionSites handle actual construction
         addStampToPlannedStructures(room, { x: pos.x, y: pos.y }, stamp);
-
-        const look = room.lookAt(pos.x, pos.y);
-        let hasWallOrSite = false;
-        for (const o of look) {
-            if (o.type === LOOK_STRUCTURES && o.structure && o.structure.structureType === STRUCTURE_WALL) {
-                hasWallOrSite = true;
-                break;
-            }
-            if (o.type === LOOK_CONSTRUCTION_SITES && o.constructionSite && o.constructionSite.structureType === STRUCTURE_WALL) {
-                hasWallOrSite = true;
-                break;
-            }
-        }
-        if (!hasWallOrSite) {
-            room.createConstructionSite(pos.x, pos.y, STRUCTURE_WALL);
-            newWallsPlanned++;
-        }
+        newWallsPlanned++;
     }
     
     if (newWallsPlanned > 0) {
@@ -1097,25 +1101,56 @@ function buildEntranceCurtains(room, plan) {
         // Avoid planning on terrain walls entirely
         if (terrain.get(item.x, item.y) === TERRAIN_MASK_WALL) continue;
 
-        // Record in planned structures
+        // Only add to planned structures - let createMissingConstructionSites handle actual construction
         addStampToPlannedStructures(room, { x: item.x, y: item.y }, [[0, 0, item.type]]);
-
-        // Create construction site if not already present
-        const look = room.lookAt(item.x, item.y);
-        let exists = false;
-        for (const o of look) {
-            if (o.type === LOOK_STRUCTURES && o.structure && o.structure.structureType === item.type) { exists = true; break; }
-            if (o.type === LOOK_CONSTRUCTION_SITES && o.constructionSite && o.constructionSite.structureType === item.type) { exists = true; break; }
-        }
-        if (!exists) {
-            const res = room.createConstructionSite(item.x, item.y, item.type);
-            if (res === OK) {
-                if (item.type === STRUCTURE_WALL) wallsPlanned++; else rampartsPlanned++;
-            }
+        
+        if (item.type === STRUCTURE_WALL) {
+            wallsPlanned++;
+        } else {
+            rampartsPlanned++;
         }
     }
     if (wallsPlanned || rampartsPlanned) {
         console.log(`🧱 Curtains: planned ${wallsPlanned} walls and ${rampartsPlanned} ramparts`);
+    }
+}
+
+// Create initial defensive structures immediately after base planning
+function createInitialDefensiveStructures(room) {
+    if (!room.memory.plannedStructures) return;
+    
+    let wallsCreated = 0;
+    let rampartsCreated = 0;
+    
+    // Only create walls and ramparts from planned structures
+    const defensiveStructures = room.memory.plannedStructures.filter(s => 
+        s.type === STRUCTURE_WALL || s.type === STRUCTURE_RAMPART
+    );
+    
+    for (const planned of defensiveStructures) {
+        const pos = new RoomPosition(planned.x, planned.y, room.name);
+        
+        // Check if structure or construction site already exists
+        const structures = pos.lookFor(LOOK_STRUCTURES);
+        const constructionSites = pos.lookFor(LOOK_CONSTRUCTION_SITES);
+        
+        const hasStructure = structures.some(s => s.structureType === planned.type);
+        const hasConstructionSite = constructionSites.some(c => c.structureType === planned.type);
+        
+        if (!hasStructure && !hasConstructionSite) {
+            const result = room.createConstructionSite(pos.x, pos.y, planned.type);
+            if (result === OK) {
+                if (planned.type === STRUCTURE_WALL) {
+                    wallsCreated++;
+                } else {
+                    rampartsCreated++;
+                }
+            }
+        }
+    }
+    
+    if (wallsCreated > 0 || rampartsCreated > 0) {
+        console.log(`🛡️ Initial defenses: Created ${wallsCreated} walls and ${rampartsCreated} ramparts`);
     }
 }
 
@@ -1922,7 +1957,10 @@ function runTowers(room) {
                     if (target) {
                         const repairResult = tower.repair(target);
                         if (repairResult === OK) {
-                            console.log(`🔧 Tower repairing ${target.structureType} at (${target.pos.x},${target.pos.y}) - ${target.hits}/${target.hitsMax} hits`);
+                            const structureType = target.structureType === STRUCTURE_WALL ? 'wall' : 
+                                                target.structureType === STRUCTURE_RAMPART ? 'rampart' : 
+                                                target.structureType;
+                            console.log(`🔧 Tower repairing ${structureType} at (${target.pos.x},${target.pos.y}) - ${target.hits}/${target.hitsMax} hits`);
                         } else {
                             console.log(`❌ Tower repair failed: ${repairResult}`);
                         }
@@ -2306,14 +2344,23 @@ function runUpgrader(creep) {
 function manageDefenseHitPoints(room) {
     const rcl = room.controller.level;
     const wallTargetHits = WALL_TARGET_HITS[rcl] || WALL_TARGET_HITS[1];
+    const rampartTargetHits = RAMPART_TARGET_HITS[rcl] || RAMPART_TARGET_HITS[1];
     
     const walls = room.find(FIND_STRUCTURES, {
         filter: (structure) => structure.structureType === STRUCTURE_WALL
+    });
+    
+    const ramparts = room.find(FIND_STRUCTURES, {
+        filter: (structure) => structure.structureType === STRUCTURE_RAMPART
     });
 
     let wallsBelowTarget = 0;
     let wallsAtTarget = 0;
     let wallsCritical = 0;
+    
+    let rampartsBelowTarget = 0;
+    let rampartsAtTarget = 0;
+    let rampartsCritical = 0;
 
     walls.forEach(wall => {
         if (wall.hits < wallTargetHits) {
@@ -2325,9 +2372,25 @@ function manageDefenseHitPoints(room) {
             wallsAtTarget++;
         }
     });
+    
+    ramparts.forEach(rampart => {
+        if (rampart.hits < rampartTargetHits) {
+            rampartsBelowTarget++;
+            if (rampart.hits < rampartTargetHits * 0.2) {
+                rampartsCritical++;
+            }
+        } else {
+            rampartsAtTarget++;
+        }
+    });
 
-    if (Game.time % 50 === 0 && walls.length > 0) {
-        console.log(`🛡️ Walls (RCL ${rcl}, target: ${wallTargetHits.toLocaleString()}): ${wallsAtTarget} at target, ${wallsBelowTarget} need repair (${wallsCritical} critical)`);
+    if (Game.time % 50 === 0 && (walls.length > 0 || ramparts.length > 0)) {
+        if (walls.length > 0) {
+            console.log(`🛡️ Walls (RCL ${rcl}, target: ${wallTargetHits.toLocaleString()}): ${wallsAtTarget} at target, ${wallsBelowTarget} need repair (${wallsCritical} critical)`);
+        }
+        if (ramparts.length > 0) {
+            console.log(`🛡️ Ramparts (RCL ${rcl}, target: ${rampartTargetHits.toLocaleString()}): ${rampartsAtTarget} at target, ${rampartsBelowTarget} need repair (${rampartsCritical} critical)`);
+        }
     }
 }
 
@@ -2443,17 +2506,25 @@ function getSharedConstructionTarget(room) {
 function getDefensesNeedingRepair(room) {
     const rcl = room.controller.level;
     const wallTargetHits = WALL_TARGET_HITS[rcl] || WALL_TARGET_HITS[1];
+    const rampartTargetHits = RAMPART_TARGET_HITS[rcl] || RAMPART_TARGET_HITS[1];
     
     // Find walls and ramparts needing repair
     const defenses = room.find(FIND_STRUCTURES, {
         filter: (structure) => {
-            return (structure.structureType === STRUCTURE_WALL || structure.structureType === STRUCTURE_RAMPART) &&
-                   structure.hits < wallTargetHits;
+            if (structure.structureType === STRUCTURE_WALL) {
+                return structure.hits < wallTargetHits;
+            } else if (structure.structureType === STRUCTURE_RAMPART) {
+                return structure.hits < rampartTargetHits;
+            }
+            return false;
         }
     });
 
     return defenses
-        .map(def => ({ structure: def, targetHits: wallTargetHits }))
+        .map(def => ({ 
+            structure: def, 
+            targetHits: def.structureType === STRUCTURE_WALL ? wallTargetHits : rampartTargetHits 
+        }))
         .sort((a, b) => {
             const aPercent = a.structure.hits / a.targetHits;
             const bPercent = b.structure.hits / b.targetHits;
