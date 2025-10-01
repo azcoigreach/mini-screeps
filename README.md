@@ -26,18 +26,13 @@ A minimal, self-contained Screeps bot focused on **Pixel earning** with advanced
 - **Behavior**: Parked on source containers for continuous operation
 
 ### **Hauling Calculations**
-- **Formula**: `Trtt = 2d + 4` (round-trip time with roads)
-- **CARRY Requirements**: `Math.ceil((2/5) * Trtt)` total CARRY parts
-- **MOVE Ratio**: `MOVE ≈ CARRY/2` (assumes roads for efficiency)
-- **Dynamic Sizing**: 2-3 haulers based on energy capacity
+ - **Dynamic Sizing**: Hauler counts are calculated from throughput math (carry parts per hauler → energy/trip → haulersNeeded). The spawning logic now ensures the hauler target respects the throughput-calculated minimum (prevents undersizing hauler population).
 
 ### **Energy Flow Control**
-- **Builder Allocation**: 10 energy/tick when construction needed
-- **Upgrader Allocation**: Remaining energy (minimum 4 energy/tick)
-- **Dynamic Balancing**: Adjusts based on room construction needs
-
-### **Distance Transform Optimization**
-- **Algorithm**: Multi-pass distance transform for optimal structure placement
+ - Gets energy from dropped energy first (prefers drops near the current build target or assigned source), then withdraws from nearby source containers to top up when near a source.
+ - Builds construction sites when available
+ - Helps upgrade controller when no construction sites
+ - Spawn count: builders scale with construction backlog (1 base, up to 3 builders depending on number of construction sites)
 - **Purpose**: Finds positions with good wall distance and controller/spawn access
 - **Benefits**: Minimizes creep travel distances and maximizes base efficiency
 
