@@ -31,6 +31,10 @@ The bot calculates optimal creep configurations using:
 - `creep.memory.assignedSource`: Source ID for distributed energy gathering
 - `room.memory.sharedConstructionTarget`: Single target for all builders
 
+Additional builder energy rules:
+- Builders prefer picking up dropped energy first and will prioritize drops near their current `buildTarget` or `assignedSource` before selecting room-wide drops.
+- After picking up ground energy, builders will attempt to top up from a nearby source container (<=2 tiles) if they still have free capacity.
+
 ### Function Naming Conventions
 - `runRole(creep)`: Main creep behavior functions (e.g., `runMiner`, `runHauler`)
 - `placeComponentStamp()`: Base planning functions that add structures to planned array
@@ -117,6 +121,10 @@ Unlike typical Screeps bots, this code calculates exact energy throughput requir
 - **Preserve single-file architecture**: Don't split into modules - deployment simplicity is key
 - **Keep stamp-based planning**: Use existing stamp pattern for new structure types
 - **Maintain distribution system**: Energy-gathering roles must use `getDistributedEnergyContainer()`
+
+Population & throughput notes:
+- Hauler counts are computed using throughput math (Trtt → carry per hauler → energy per trip → haulersNeeded). The spawn logic now enforces that the hauler spawn target respects the throughput-calculated minimum.
+- Builders will scale with construction backlog (1 base, up to 3 builders depending on number of construction sites).
 
 ## Common Tasks
 

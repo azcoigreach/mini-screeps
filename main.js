@@ -44,7 +44,28 @@ const WALL_TARGET_HITS = {
 };
 
 // Ramparts use the same hit point targets as walls
-const RAMPART_TARGET_HITS = WALL_TARGET_HITS;
+// Rampart targets: separate mapping so ramparts can be tuned independently from walls.
+// By default we mirror wall targets for higher RCLs but keep lower targets for early levels
+// to avoid over-investing into ramparts (especially at RCL 3 where walls jump to 30k).
+const RAMPART_TARGET_HITS = {
+    1: 1000,
+    2: 10000,
+    3: 30000,
+    4: 100000,
+    5: 300000,
+    6: 1000000,
+    7: 3000000,
+    8: 10000000
+};
+
+// Container repair configuration: builders will prioritize repairing containers
+// if their hits are below this absolute threshold OR below this percentage of max hits
+const CONTAINER_REPAIR_THRESHOLD = 20000; // absolute hits threshold
+const CONTAINER_REPAIR_PERCENT = 0.5; // repair if below 50% of hitsMax
+
+// Tower refill threshold: haulers will only refill towers when their energy
+// is below this fraction of capacity, or when hostiles are present.
+const TOWER_REFILL_THRESHOLD = 0.5; // 50%
 
 module.exports.loop = function () {
     // Clean up memory
@@ -166,34 +187,43 @@ function planBase(room) {
     
     // Place core stamp (spawn area + extensions)
     placeCoreStamp(room, spawn);
+    console.log(`🟡 Core stamp placed. Planned structures: ${room.memory.plannedStructures.length}`);
     
     // Place source stamps (containers + roads)
     for (const source of sources) {
         placeSourceStamp(room, source);
+        console.log(`🟢 Source stamp placed for source ${source.id}. Planned structures: ${room.memory.plannedStructures.length}`);
     }
     
     // Place controller stamp (container + roads)
     placeControllerStamp(room, controller, anchor);
+    console.log(`🔵 Controller stamp placed. Planned structures: ${room.memory.plannedStructures.length}`);
     
-    // Place extension fields near spawn
+    // Always plan extension fields near spawn, regardless of RCL
+    console.log(`🟦 Planning extensions near spawn (future-proof, not gated by RCL)...`);
     placeExtensionFieldsOptimal(room, spawn);
+    console.log(`🟣 Extension fields placed. Planned structures: ${room.memory.plannedStructures.length}`);
     
-    // Place tower clusters for better defense coverage
+    // Always plan tower clusters for better defense coverage, regardless of RCL
     placeDefenseStampsOptimal(room, spawn);
+    console.log(`🧡 Defense stamps placed. Planned structures: ${room.memory.plannedStructures.length}`);
         
     // Connect everything with roads
     planRoadNetwork(room, anchor, sources, controller);
+    console.log(`🛣️ Road network planned. Planned structures: ${room.memory.plannedStructures.length}`);
     
     // Place minimal bookend walls - just 2 walls per entrance at the endpoints
     // This strategy places walls only at the ends of each passable span, allowing
     // enemies to enter but significantly restricting their movement options
     const edgeSealPlan = planMinimalEdgeSeal(room);
     buildPlannedEdgeSeal(room, edgeSealPlan);
+    console.log(`🧱 Bookend walls planned. Planned structures: ${room.memory.plannedStructures.length}`);
 
     // Add an interior "curtain" line 2 tiles inside the room across each entrance
     // with a single center rampart as a friendly gate.
     const entranceCurtainPlan = planEntranceCurtains(room);
     buildEntranceCurtains(room, entranceCurtainPlan);
+    console.log(`🟤 Entrance curtains planned. Planned structures: ${room.memory.plannedStructures.length}`);
     
     console.log(`Base planned with ${room.memory.plannedStructures.length} structures`);
     
@@ -1350,40 +1380,55 @@ function getPopulationByRCL(rcl) {
 
     // Calculate hauler capacity per trip (CARRY parts × 50 energy)
     const energyPerTripPerHauler = carryPerHauler * 50;
-
-    // Haulers needed = total energy flow / energy per trip per hauler
-    // But account for travel time - haulers spend Trtt ticks traveling
     const haulerEfficiency = 1 / (1 + roundTripTime / 50); // Rough efficiency factor
     const haulersNeeded = Math.ceil(totalEnergyFlow / (energyPerTripPerHauler * haulerEfficiency));
-
-    // Miners: Always 1 per source (5W1M can harvest 10 energy/tick, matching source output)
     const minersNeeded = sources.length;
 
-    // Remaining energy after hauler needs for upgraders and builders
-    const energyForUpgradersBuilders = Math.max(0, totalEnergyFlow - (haulersNeeded * energyPerTripPerHauler * haulerEfficiency));
+    // Adaptive scaling based on surplus energy and storage/terminal status
+    const energyAvailable = room.energyAvailable;
+    const energyCapacity = room.energyCapacityAvailable;
+    const energyPercent = energyAvailable / energyCapacity;
+    const storage = room.find(FIND_STRUCTURES, { filter: s => s.structureType === STRUCTURE_STORAGE })[0];
+    const terminal = room.find(FIND_STRUCTURES, { filter: s => s.structureType === STRUCTURE_TERMINAL })[0];
 
-    // Upgraders and builders scale with RCL and available energy
     let upgradersNeeded = 1;
     let buildersNeeded = 1;
+    // Ensure we always respect throughput-calculated haulersNeeded as a minimum
+    let haulersTarget = Math.max(1, haulersNeeded);
 
-    if (rcl >= 2) {
-        // More upgraders at higher RCL for faster progression
-        upgradersNeeded = Math.min(6, Math.max(1, Math.floor(energyForUpgradersBuilders / 5)));
-        buildersNeeded = Math.min(4, Math.max(1, Math.floor(energyForUpgradersBuilders / 3)));
+    if (!storage) {
+        // No storage: use all energy for upgraders/haulers
+        upgradersNeeded = Math.max(2, Math.floor(energyCapacity / 150));
+        haulersTarget = Math.max(2, Math.floor(energyCapacity / 300));
+    } else {
+        // Storage exists: reserve 30% for storage, use 70% for upgraders/haulers
+        const storageReserve = Math.floor(energyCapacity * 0.3);
+        const usableEnergy = Math.max(0, energyAvailable - storageReserve);
+        upgradersNeeded = Math.max(2, Math.floor(usableEnergy / 200));
+    haulersTarget = Math.max(Math.max(2, Math.floor(usableEnergy / 400)), haulersNeeded);
+
+        // If storage is full and terminal exists, prioritize selling excess
+        if (terminal && storage.store[RESOURCE_ENERGY] > storage.storeCapacity * 0.95) {
+            // Optionally, could spawn extra haulers to move energy to terminal
+            haulersTarget += 1;
+        }
     }
 
-    // Ensure minimums for stability
+    // Scale builders with construction workload: 1 base, +1 per >5 sites, up to 3
+    const constructionSitesCount = room.find(FIND_CONSTRUCTION_SITES).length;
+    buildersNeeded = 1 + Math.min(2, Math.floor(constructionSitesCount / 5));
+
     const result = {
         miner: Math.max(1, minersNeeded),
-        hauler: Math.max(1, haulersNeeded),
-        upgrader: Math.max(1, upgradersNeeded),
-        builder: Math.max(1, buildersNeeded)
+        hauler: haulersTarget,
+        upgrader: upgradersNeeded,
+        builder: buildersNeeded
     };
 
     // Log throughput calculations every 100 ticks
     if (Game.time % 100 === 0) {
         console.log(`📊 THROUGHPUT CALC: avgDist=${avgDistance.toFixed(1)}, Trtt=${roundTripTime.toFixed(1)}, carryNeeded=${carryPerHauler}, haulers=${result.hauler}, miners=${result.miner}`);
-        console.log(`⚡ ENERGY FLOW: ${totalEnergyFlow} e/tick from ${sources.length} sources, ${energyForUpgradersBuilders.toFixed(1)} e/tick available for upgraders/builders`);
+        console.log(`⚡ ENERGY FLOW: ${totalEnergyFlow} e/tick from ${sources.length} sources, Room Energy: ${energyAvailable}/${energyCapacity} (${(energyPercent*100).toFixed(0)}%)`);
     }
 
     return result;
@@ -1484,7 +1529,6 @@ function createMissingConstructionSites(room) {
     if (!room.memory.plannedStructures) return;
     
     const rcl = room.controller.level;
-    console.log(`🏗️ Creating construction sites for RCL ${rcl}...`);
     
     // Limit construction sites to avoid spam - reduce limit when building roads
     const existingConstructionSites = room.find(FIND_CONSTRUCTION_SITES).length;
@@ -1553,6 +1597,7 @@ function createMissingConstructionSites(room) {
     let totalPlanned = 0;
     let extensionsCreated = 0;
     let roadsSkipped = 0;
+    const createdByType = {};
     
     // Count existing important structures to determine if we should build roads yet
     const existingExtensions = room.find(FIND_STRUCTURES, {
@@ -1572,14 +1617,15 @@ function createMissingConstructionSites(room) {
         if (!allowedStructures.includes(planned.type)) {
             continue;
         }
-        
+
+        // Extensions are allowed per RCL limits (no extra gating here)
         // Check if we're already at the limit for this structure type
         const currentCount = (existingStructures[planned.type] || 0) + (constructionSites[planned.type] || 0);
         const maxAllowed = getMaxStructuresByRCL(rcl, planned.type);
         if (currentCount >= maxAllowed) {
             continue; // Already at limit, skip this structure
         }
-        
+
         // Skip roads until we have essential structures built
         if (planned.type === STRUCTURE_ROAD && !shouldBuildRoads) {
             roadsSkipped++;
@@ -1590,49 +1636,38 @@ function createMissingConstructionSites(room) {
         const structures = pos.lookFor(LOOK_STRUCTURES);
         const constructionSitesAtPos = pos.lookFor(LOOK_CONSTRUCTION_SITES);
         
-        // Check if structure or construction site already exists
-        const hasStructure = structures.some(s => s.structureType === planned.type);
-        const hasConstructionSite = constructionSitesAtPos.some(c => c.structureType === planned.type);
-        
+    // Check if structure or construction site already exists
+    const hasStructure = structures.some(s => s.structureType === planned.type);
+    const hasConstructionSite = constructionSitesAtPos.some(c => c.structureType === planned.type);
+
         if (!hasStructure && !hasConstructionSite) {
-            // Prioritize extensions - create more extension sites if needed
-            if (planned.type === STRUCTURE_EXTENSION) {
-                const result = room.createConstructionSite(pos.x, pos.y, planned.type);
-                if (result === OK) {
-                    created++;
+            const result = room.createConstructionSite(pos.x, pos.y, planned.type);
+            if (result === OK) {
+                created++;
+                createdByType[planned.type] = (createdByType[planned.type] || 0) + 1;
+                if (planned.type === STRUCTURE_EXTENSION) {
                     extensionsCreated++;
-                    if (spawn) {
-                        const distance = spawn.pos.getRangeTo(pos.x, pos.y);
-                        console.log(`✅ PRIORITY: Created extension construction site at (${pos.x},${pos.y}) - distance ${distance} from spawn`);
-                    }
-                } else if (result !== ERR_RCL_NOT_ENOUGH) {
-                    // Only log errors that aren't RCL-related spam
-                    console.log(`❌ Failed to create ${planned.type} at (${pos.x},${pos.y}): ${result}`);
                 }
-            } else {
-                // For non-extensions, only create if we have room and haven't maxed out extension sites
-                const result = room.createConstructionSite(pos.x, pos.y, planned.type);
-                if (result === OK) {
-                    created++;
-                    if (planned.type === STRUCTURE_ROAD) {
-                        console.log(`✅ Created road construction site at (${pos.x},${pos.y}) - after ${existingExtensions} extensions built`);
-                    }
-                } else if (result !== ERR_RCL_NOT_ENOUGH) {
-                    // Only log errors that aren't RCL-related spam
-                    console.log(`❌ Failed to create ${planned.type} at (${pos.x},${pos.y}): ${result}`);
-                }
+            } else if (result !== ERR_RCL_NOT_ENOUGH) {
+                // Only log unexpected failures (not RCL gating)
+                console.log(`❌ Failed to create ${planned.type} at (${pos.x},${pos.y}): ${result}`);
             }
         }
-        
+
         // Limit total construction sites, but allow more extensions
         if (created >= 10 && extensionsCreated >= 5) break;
     }
     
     if (created > 0) {
-        console.log(`🏗️ Created ${created} construction sites (${extensionsCreated} extensions prioritized)`);
+        const parts = [];
+        for (const t in createdByType) {
+            const short = t.toString().replace('structure_', '').toLowerCase();
+            parts.push(`${createdByType[t]} ${short}`);
+        }
+        console.log(`🏗️ Created ${created} construction sites (${parts.join(', ')})`);
     }
     if (roadsSkipped > 0) {
-        console.log(`🛣️ Skipped ${roadsSkipped} roads - building extensions first (need ${5 - existingExtensions} more extensions and ${1 - existingContainers} more containers)`);
+        console.log(`🛣️ Skipped ${roadsSkipped} roads - building extensions first (need ${Math.max(0, 5 - existingExtensions)} more extensions and ${Math.max(0, 1 - existingContainers)} more containers)`);
     }
     
     // Log structure limits for debugging
@@ -1709,6 +1744,35 @@ function displayStatusDashboard(room, creeps) {
     const busyHaulers = creeps.hauler.filter(h => h.store[RESOURCE_ENERGY] > 0).length;
     const idleHaulers = creeps.hauler.length - busyHaulers;
     
+    // Check ground energy accumulation at sources
+    let totalGroundEnergy = 0;
+    let maxGroundAtSource = 0;
+    const sourceEnergyData = [];
+    
+    sources.forEach(source => {
+        const totalSourceEnergy = getTotalSourceEnergy(room, source);
+        const droppedEnergy = room.find(FIND_DROPPED_RESOURCES, {
+            filter: (resource) => resource.resourceType === RESOURCE_ENERGY && 
+                                resource.pos.getRangeTo(source) <= 3
+        });
+        const groundEnergy = droppedEnergy.reduce((sum, drop) => sum + drop.amount, 0);
+        
+        totalGroundEnergy += groundEnergy;
+        if (groundEnergy > maxGroundAtSource) {
+            maxGroundAtSource = groundEnergy;
+        }
+        
+        sourceEnergyData.push({
+            id: source.id.substr(-4),
+            total: totalSourceEnergy,
+            ground: groundEnergy,
+            assignedCreeps: _.filter(Game.creeps, c => 
+                (c.memory.role === 'hauler' || c.memory.role === 'builder' || c.memory.role === 'upgrader') &&
+                c.memory.assignedSource === source.id
+            ).length
+        });
+    });
+    
     console.log(`\n=== BASE STATUS RCL ${rcl} ===`);
     console.log(`Controller: ${progress}/${progressTotal} (${progressPercent}%) - ${progressTotal - progress} to next RCL`);
     console.log(`Energy: ${energyAvailable}/${energyCapacity} (${((energyAvailable/energyCapacity)*100).toFixed(0)}%)`);
@@ -1718,6 +1782,15 @@ function displayStatusDashboard(room, creeps) {
     const targets = getPopulationByRCL(rcl);
     console.log(`Miners: ${creeps.miner.length}/${targets.miner} | Haulers: ${creeps.hauler.length}/${targets.hauler} (${busyHaulers} busy, ${idleHaulers} idle)`);
     console.log(`Upgraders: ${creeps.upgrader.length}/${targets.upgrader} | Builders: ${creeps.builder.length}/${targets.builder}`);
+    
+    // Show energy distribution across sources
+    if (totalGroundEnergy > 100) {
+        console.log(`\n⚠️  GROUND ENERGY: ${totalGroundEnergy} total (max ${maxGroundAtSource} at one source)`);
+    }
+    sourceEnergyData.forEach(data => {
+        const groundIndicator = data.ground > 100 ? `⚠️${data.ground}ground ` : '';
+        console.log(`Source ${data.id}: ${data.total}e total, ${data.assignedCreeps} creeps ${groundIndicator}`);
+    });
     
     if (constructionSites > 0) {
         console.log(`\n--- CONSTRUCTION ---`);
@@ -1768,76 +1841,50 @@ function visualizeBasePlan(room) {
     };
             
     // Visualize planned structures
+    // 1. Base planning visualization (planned structures)
     room.memory.plannedStructures.forEach(planned => {
-        const color = structureColors[planned.type] || '#FFFFFF';
+        const color = structureColors[planned.type] || '#fff';
         const pos = new RoomPosition(planned.x, planned.y, room.name);
-        
-        // Check if structure already exists
-        const existingStructures = pos.lookFor(LOOK_STRUCTURES);
-        const existingConstruction = pos.lookFor(LOOK_CONSTRUCTION_SITES);
-        const hasStructure = existingStructures.some(s => s.structureType === planned.type);
-        const hasConstruction = existingConstruction.some(c => c.structureType === planned.type);
-        
-        if (hasStructure) {
-            // Structure is built - show as solid
-            visual.circle(planned.x, planned.y, {
-                radius: 0.35,
-                fill: color,
-                opacity: 0.8
-            });
-        } else if (hasConstruction) {
-            // Under construction - show as dashed circle
-            visual.circle(planned.x, planned.y, {
-                radius: 0.35,
-                fill: 'transparent',
-                stroke: color,
-                strokeWidth: 0.15,
-                lineDash: [0.2, 0.1],
-                opacity: 0.7
-            });
-        } else {
-            // Planned but not built - show as dotted
-            visual.circle(planned.x, planned.y, {
-                radius: 0.25,
-                fill: 'transparent',
-                stroke: color,
-                strokeWidth: 0.1,
-                lineDash: [0.1, 0.1],
-                opacity: 0.5
-            });
-        }
-        
-        // Special visualization for roads
-        if (planned.type === STRUCTURE_ROAD) {
-            visual.circle(planned.x, planned.y, {
-                radius: 0.15,
-                fill: color,
-                opacity: hasStructure ? 0.6 : 0.3
-            });
-        }
-        
-        // Special visualization for walls
-        if (planned.type === STRUCTURE_WALL) {
-            visual.rect(planned.x - 0.4, planned.y - 0.4, 0.8, 0.8, {
-                fill: hasStructure ? color : 'transparent',
-                stroke: color,
-                strokeWidth: 0.15,
-                opacity: hasStructure ? 0.9 : 0.5
-            });
-        }
-        // Special visualization for ramparts
-        if (planned.type === STRUCTURE_RAMPART) {
-            visual.rect(planned.x - 0.45, planned.y - 0.45, 0.9, 0.9, {
-                fill: 'transparent',
-                stroke: color,
-                strokeWidth: 0.15,
-                opacity: 0.8
-            });
-        }
-        
+        visual.circle(pos.x, pos.y, {radius:0.45,fill:color,opacity:0.35,stroke:color});
+        visual.text(planned.type.replace('structure_','').substr(0,2).toUpperCase(), pos.x, pos.y, {color:'#222',font:0.5});
     });
-    
-        
+
+    // 2. Energy/Controller overlays
+    // Sources: show container + ground energy, renewal timer
+    const sources = room.find(FIND_SOURCES);
+    sources.forEach(source => {
+        const container = room.find(FIND_STRUCTURES, {
+            filter: s => s.structureType === STRUCTURE_CONTAINER && s.pos.getRangeTo(source) <= 2
+        })[0];
+        const dropped = room.find(FIND_DROPPED_RESOURCES, {
+            filter: r => r.resourceType === RESOURCE_ENERGY && r.pos.getRangeTo(source) <= 3
+        });
+        const groundAmount = dropped.reduce((sum, r) => sum + r.amount, 0);
+        const containerAmount = container ? (container.store[RESOURCE_ENERGY] || 0) : 0;
+        const ticksToRenew = source.ticksToRegeneration || 0;
+        visual.text(`S:${source.id.substr(-4)}`, source.pos.x, source.pos.y - 1.2, {color:'#ffe56d',font:0.5});
+        visual.text(`C:${containerAmount}`, source.pos.x, source.pos.y - 0.7, {color:'#4ecdc4',font:0.4});
+        visual.text(`G:${groundAmount}`, source.pos.x, source.pos.y - 0.3, {color:'#ff6b6b',font:0.4});
+        visual.text(`Renew:${ticksToRenew}`, source.pos.x, source.pos.y + 0.2, {color:'#aaa',font:0.35});
+    });
+
+    // Upgrade container: show energy
+    const controller = room.controller;
+    const upgradeContainer = room.find(FIND_STRUCTURES, {
+        filter: s => s.structureType === STRUCTURE_CONTAINER && controller && s.pos.getRangeTo(controller) <= 3
+    })[0];
+    if (upgradeContainer) {
+        visual.text(`Upgrade:${upgradeContainer.store[RESOURCE_ENERGY]||0}`, upgradeContainer.pos.x, upgradeContainer.pos.y + 0.7, {color:'#4ecdc4',font:0.45});
+    }
+
+    // Controller: show progress and %
+    if (controller) {
+        const percent = ((controller.progress/controller.progressTotal)*100).toFixed(1);
+        visual.text(`RCL:${controller.level}`, controller.pos.x, controller.pos.y - 1.2, {color:'#fff',font:0.5});
+        visual.text(`Progress:${controller.progress}/${controller.progressTotal}`, controller.pos.x, controller.pos.y - 0.7, {color:'#ffe56d',font:0.4});
+        visual.text(`${percent}%`, controller.pos.x, controller.pos.y - 0.3, {color:'#4ecdc4',font:0.45});
+    }
+
     // Show legend in top-right corner
     const legendX = 45;
     const legendY = 5;
@@ -1955,6 +2002,14 @@ function runTowers(room) {
                     // Find the most damaged structure within range
                     const target = tower.pos.findClosestByRange(structuresNeedingRepair);
                     if (target) {
+                        const rcl = room.controller.level;
+                        const wallTarget = WALL_TARGET_HITS[rcl] || WALL_TARGET_HITS[1];
+                        const rampartTarget = RAMPART_TARGET_HITS[rcl] || RAMPART_TARGET_HITS[1];
+
+                        // Skip repairs if target already meets configured thresholds
+                        if (target.structureType === STRUCTURE_WALL && target.hits >= wallTarget) return;
+                        if (target.structureType === STRUCTURE_RAMPART && target.hits >= rampartTarget) return;
+
                         const repairResult = tower.repair(target);
                         if (repairResult === OK) {
                             const structureType = target.structureType === STRUCTURE_WALL ? 'wall' : 
@@ -2064,12 +2119,23 @@ function runHauler(creep) {
         const spawn = creep.room.find(FIND_MY_SPAWNS)[0];
         
         // Find all potential targets
+        // Determine if there are hostiles present — if so, towers become high-priority targets
+        const hostiles = creep.room.find(FIND_HOSTILE_CREEPS);
         const spawnTargets = creep.room.find(FIND_STRUCTURES, {
             filter: (structure) => {
-                return (structure.structureType === STRUCTURE_EXTENSION ||
-                        structure.structureType === STRUCTURE_SPAWN ||
-                        structure.structureType === STRUCTURE_TOWER) &&
-                       structure.store.getFreeCapacity(RESOURCE_ENERGY) > 0;
+                // Extensions and spawns always count if they need energy
+                if (structure.structureType === STRUCTURE_EXTENSION || structure.structureType === STRUCTURE_SPAWN) {
+                    return structure.store.getFreeCapacity(RESOURCE_ENERGY) > 0;
+                }
+
+                // Towers: only refill if below threshold or hostiles are present
+                if (structure.structureType === STRUCTURE_TOWER) {
+                    const towerEnergyFrac = (structure.store[RESOURCE_ENERGY] || 0) / (structure.storeCapacity || 1000);
+                    if (hostiles.length > 0) return structure.store.getFreeCapacity(RESOURCE_ENERGY) > 0;
+                    return towerEnergyFrac < TOWER_REFILL_THRESHOLD && structure.store.getFreeCapacity(RESOURCE_ENERGY) > 0;
+                }
+
+                return false;
             }
         });
         
@@ -2139,12 +2205,37 @@ function runHauler(creep) {
         });
 
         if (sourceContainers.length > 0) {
-            // Use unified distribution system for all energy-gathering roles
-            const target = getDistributedEnergyContainer(creep, sourceContainers);
+            // Use enhanced distribution system for all energy-gathering roles
+            const energySource = getDistributedEnergyContainer(creep, sourceContainers);
             
-            if (target) {
-                if (creep.withdraw(target, RESOURCE_ENERGY) === ERR_NOT_IN_RANGE) {
-                    creep.moveTo(target, { visualizePathStyle: { stroke: '#ffaa00' } });
+            if (energySource && energySource.target) {
+                let result;
+                if (energySource.actionType === 'pickup') {
+                    result = creep.pickup(energySource.target);
+                } else {
+                    result = creep.withdraw(energySource.target, RESOURCE_ENERGY);
+                }
+                
+                if (result === ERR_NOT_IN_RANGE) {
+                    creep.moveTo(energySource.target, { visualizePathStyle: { stroke: '#ffaa00' } });
+                } else if (result === OK && energySource.actionType === 'pickup') {
+                    const srcId = creep.memory.assignedSource ? creep.memory.assignedSource.substr(-4) : 'none';
+                    console.log(`${creep.name} picked up ${energySource.target.amount} ground energy near source ${srcId}`);
+
+                    // Top-up from a nearby source container (<=2 tiles) if we still have capacity
+                    if (creep.store.getFreeCapacity(RESOURCE_ENERGY) > 0) {
+                        const nearbyContainer = creep.pos.findClosestByRange(FIND_STRUCTURES, {
+                            filter: s => s.structureType === STRUCTURE_CONTAINER &&
+                                         s.store[RESOURCE_ENERGY] > 0 &&
+                                         creep.pos.getRangeTo(s.pos) <= 2
+                        });
+                        if (nearbyContainer) {
+                            const res2 = creep.withdraw(nearbyContainer, RESOURCE_ENERGY);
+                            if (res2 === ERR_NOT_IN_RANGE) {
+                                creep.moveTo(nearbyContainer, { visualizePathStyle: { stroke: '#ffaa00' } });
+                            }
+                        }
+                    }
                 }
             }
         } else {
@@ -2198,6 +2289,72 @@ function runHauler(creep) {
     }
 }
 
+// Helper function: Calculate total energy available at each source (container + ground)
+function getTotalSourceEnergy(room, source) {
+    let totalEnergy = 0;
+    
+    // Find container energy near this source
+    const container = room.find(FIND_STRUCTURES, {
+        filter: (structure) => {
+            return structure.structureType === STRUCTURE_CONTAINER &&
+                   structure.pos.getRangeTo(source) <= 2;
+        }
+    })[0];
+    
+    if (container) {
+        totalEnergy += container.store[RESOURCE_ENERGY] || 0;
+    }
+    
+    // Find dropped energy near this source
+    const droppedEnergy = room.find(FIND_DROPPED_RESOURCES, {
+        filter: (resource) => {
+            return resource.resourceType === RESOURCE_ENERGY && 
+                   resource.pos.getRangeTo(source) <= 3; // Slightly larger range for ground energy
+        }
+    });
+    
+    droppedEnergy.forEach(drop => {
+        totalEnergy += drop.amount;
+    });
+    
+    return totalEnergy;
+}
+
+// Helper function: Get best energy source (ground energy first, then container) near assigned source
+function getEnergyFromAssignedSource(creep, assignedSource) {
+    if (!assignedSource) return null;
+    
+    // First priority: Dropped energy near assigned source
+    const droppedEnergy = creep.room.find(FIND_DROPPED_RESOURCES, {
+        filter: (resource) => {
+            return resource.resourceType === RESOURCE_ENERGY && 
+                   resource.amount >= 50 &&
+                   resource.pos.getRangeTo(assignedSource) <= 3;
+        }
+    });
+    
+    if (droppedEnergy.length > 0) {
+        // Sort by amount (largest first) to be more efficient
+        droppedEnergy.sort((a, b) => b.amount - a.amount);
+        return { target: droppedEnergy[0], type: 'pickup' };
+    }
+    
+    // Second priority: Container near assigned source
+    const container = creep.room.find(FIND_STRUCTURES, {
+        filter: (structure) => {
+            return structure.structureType === STRUCTURE_CONTAINER &&
+                   structure.store[RESOURCE_ENERGY] > 0 &&
+                   structure.pos.getRangeTo(assignedSource) <= 2;
+        }
+    })[0];
+    
+    if (container) {
+        return { target: container, type: 'withdraw' };
+    }
+    
+    return null;
+}
+
 // Helper function: Get distributed container for energy pickup
 function getDistributedEnergyContainer(creep, targets) {
     if (targets.length === 0) return null;
@@ -2212,72 +2369,42 @@ function getDistributedEnergyContainer(creep, targets) {
     
     // Prefer non-source containers (storage, spawn area containers) first
     if (nonSourceContainers.length > 0) {
-        return creep.pos.findClosestByPath(nonSourceContainers);
+        // Try to find ground energy near non-source containers
+        const groundEnergy = creep.room.find(FIND_DROPPED_RESOURCES, {
+            filter: (resource) => resource.resourceType === RESOURCE_ENERGY && resource.amount >= 50
+        });
+        for (const container of nonSourceContainers) {
+            const ground = groundEnergy.find(drop => drop.pos.getRangeTo(container) <= 3);
+            if (ground) {
+                return { target: ground, actionType: 'pickup' };
+            }
+        }
+        // If no ground energy, fallback to closest non-source container
+        const closest = creep.pos.findClosestByPath(nonSourceContainers);
+        if (closest) {
+            return { target: closest, actionType: 'withdraw' };
+        }
     }
-    
+
     // If only source containers available, use distribution logic
     if (sourceContainers.length > 0) {
-        // Check if creep has an assigned source
-        if (creep.memory.assignedSource) {
-            const assignedSource = Game.getObjectById(creep.memory.assignedSource);
-            if (assignedSource) {
-                const assignedContainer = sourceContainers.find(container => 
-                    container.pos.getRangeTo(assignedSource) <= 2
-                );
-                if (assignedContainer) {
-                    return assignedContainer;
-                }
-            } else {
-                delete creep.memory.assignedSource;
-            }
-        }
-
-        const leastUsedSource = getLeastUtilizedSource(creep.room);
-        if (leastUsedSource) {
-            const leastUsedContainer = sourceContainers.find(container => 
-                container.pos.getRangeTo(leastUsedSource) <= 2
-            );
-            if (leastUsedContainer) {
-                creep.memory.assignedSource = leastUsedSource.id;
-                return leastUsedContainer;
-            }
-        }
-
-        // Fallback: distribute using current role assignments if no container matched least-used source
-        const energyGatheringCreeps = _.filter(Game.creeps, c => 
-            (c.memory.role === 'hauler' || c.memory.role === 'builder' || c.memory.role === 'upgrader') &&
-            c.name !== creep.name
-        );
-        const sourceAssignments = {};
-
-        for (const source of sources) {
-            sourceAssignments[source.id] = energyGatheringCreeps.filter(c => c.memory.assignedSource === source.id).length;
-        }
-
-        let bestSource = null;
-        let leastAssigned = 999;
-        let bestContainer = null;
-
+        // Try to find ground energy near source containers
+        const groundEnergy = creep.room.find(FIND_DROPPED_RESOURCES, {
+            filter: (resource) => resource.resourceType === RESOURCE_ENERGY && resource.amount >= 50
+        });
         for (const container of sourceContainers) {
-            for (const source of sources) {
-                if (container.pos.getRangeTo(source) <= 2) {
-                    const assignedCount = sourceAssignments[source.id] || 0;
-                    if (assignedCount < leastAssigned) {
-                        leastAssigned = assignedCount;
-                        bestSource = source;
-                        bestContainer = container;
-                    }
-                }
+            const ground = groundEnergy.find(drop => drop.pos.getRangeTo(container) <= 3);
+            if (ground) {
+                return { target: ground, actionType: 'pickup' };
             }
         }
-
-        if (bestSource) {
-            creep.memory.assignedSource = bestSource.id;
+        // If no ground energy, fallback to closest source container
+        const closest = creep.pos.findClosestByPath(sourceContainers);
+        if (closest) {
+            return { target: closest, actionType: 'withdraw' };
         }
-
-        return bestContainer;
     }
-    
+
     return null;
 }
 
@@ -2292,8 +2419,6 @@ function runUpgrader(creep) {
         const upgradeResult = creep.upgradeController(controller);
         if (upgradeResult === ERR_NOT_IN_RANGE) {
             creep.moveTo(controller.pos, { visualizePathStyle: { stroke: '#ffffff' } });
-        } else if (upgradeResult !== OK) {
-            console.log(`Upgrade error: ${upgradeResult} for creep ${creep.name}`);
         }
     } else {
         // Get energy from containers or storage only (spawn/extensions reserved for spawning)
@@ -2306,15 +2431,31 @@ function runUpgrader(creep) {
         });
         
         if (targets.length > 0) {
-            // Use distributed container selection for balanced source usage
-            const target = getDistributedEnergyContainer(creep, targets);
-            
-            if (target) {
-                const withdrawResult = creep.withdraw(target, RESOURCE_ENERGY);
-                if (withdrawResult === ERR_NOT_IN_RANGE) {
-                    creep.moveTo(target, { visualizePathStyle: { stroke: '#ffaa00' } });
-                } else if (withdrawResult !== OK && withdrawResult !== ERR_NOT_ENOUGH_RESOURCES) {
-                    console.log(`Upgrader withdraw error: ${withdrawResult}`);
+            // Use enhanced energy distribution that prioritizes ground energy
+            const energySource = getDistributedEnergyContainer(creep, targets);
+            if (energySource && energySource.target) {
+                let result;
+                if (energySource.actionType === 'pickup') {
+                    result = creep.pickup(energySource.target);
+                } else {
+                    result = creep.withdraw(energySource.target, RESOURCE_ENERGY);
+                }
+                if (result === ERR_NOT_IN_RANGE) {
+                    creep.moveTo(energySource.target, { visualizePathStyle: { stroke: '#ffaa00' } });
+                } else if (result === OK && energySource.actionType === 'pickup') {
+                    // After picking up ground energy, attempt to top up from a nearby source container (<=2 tiles)
+                    if (creep.store.getFreeCapacity(RESOURCE_ENERGY) > 0) {
+                        const nearbyContainer = creep.pos.findClosestByRange(FIND_STRUCTURES, {
+                            filter: s => s.structureType === STRUCTURE_CONTAINER && s.store[RESOURCE_ENERGY] > 0 &&
+                                         creep.pos.getRangeTo(s.pos) <= 2
+                        });
+                        if (nearbyContainer) {
+                            const res2 = creep.withdraw(nearbyContainer, RESOURCE_ENERGY);
+                            if (res2 === ERR_NOT_IN_RANGE) {
+                                creep.moveTo(nearbyContainer, { visualizePathStyle: { stroke: '#ffaa00' } });
+                            }
+                        }
+                    }
                 }
             }
         } else {
@@ -2534,26 +2675,41 @@ function getDefensesNeedingRepair(room) {
 }
 
 function getStructuresNeedingRepair(room) {
-    // Find all structures that are significantly damaged (below 80% of max hits)
+    // Find all structures that are significantly damaged.
+    // - Ramparts: compare against absolute RAMPART_TARGET_HITS threshold
+    // - Other structures: use the 80% of hitsMax heuristic as before
+    const rcl = room.controller.level;
+    const rampartTargetHits = RAMPART_TARGET_HITS[rcl] || RAMPART_TARGET_HITS[1];
+
     const damagedStructures = room.find(FIND_STRUCTURES, {
         filter: (structure) => {
             // Skip walls (handled separately by getDefensesNeedingRepair)
             if (structure.structureType === STRUCTURE_WALL) {
                 return false;
             }
+
+            // Ramparts: repair if below absolute rampart target
+            if (structure.structureType === STRUCTURE_RAMPART) {
+                return structure.hits < rampartTargetHits;
+            }
+
             // Skip structures that are already at full health
             if (structure.hits >= structure.hitsMax) {
                 return false;
             }
-            // Only repair structures that are below 80% health
+
+            // Other structures: Only repair structures that are below 80% health
             return structure.hits / structure.hitsMax < 0.8;
         }
     });
 
-    // Sort by most damaged first (lowest hit percentage)
+    // Sort by most damaged first (lowest hit percentage) but ensure ramparts are prioritized by absolute deficit
     return damagedStructures.sort((a, b) => {
         const aPercent = a.hits / a.hitsMax;
         const bPercent = b.hits / b.hitsMax;
+        // If one is a rampart and the other isn't, prioritize rampart if it's below its absolute target
+        if (a.structureType === STRUCTURE_RAMPART && b.structureType !== STRUCTURE_RAMPART) return -1;
+        if (b.structureType === STRUCTURE_RAMPART && a.structureType !== STRUCTURE_RAMPART) return 1;
         return aPercent - bPercent;
     });
 }
@@ -2577,20 +2733,41 @@ function runBuilder(creep) {
             }
         }
         
-        // If no assigned target, find a new one - prioritize defense repairs
+        // If no assigned target, find a new one - prioritize container repairs, then defense repairs
         if (!target) {
-            // First priority: Walls needing repair
-            const defensesNeedingRepair = getDefensesNeedingRepair(creep.room);
-            if (defensesNeedingRepair.length > 0) {
-                target = creep.pos.findClosestByPath(defensesNeedingRepair);
+            // First priority: Nearby containers that are decaying (source/container near controller/storage)
+            const containers = creep.room.find(FIND_STRUCTURES, {
+                filter: s => s.structureType === STRUCTURE_CONTAINER && s.hits < Math.max(CONTAINER_REPAIR_THRESHOLD, s.hitsMax * CONTAINER_REPAIR_PERCENT)
+            });
+            if (containers.length > 0) {
+                // Prefer containers near sources, controller, or storage
+                containers.sort((a, b) => {
+                    const aScore = (a.pos.getRangeTo(creep.pos) || 0) - (a.pos.getRangeTo(creep.room.controller) || 0);
+                    const bScore = (b.pos.getRangeTo(creep.pos) || 0) - (b.pos.getRangeTo(creep.room.controller) || 0);
+                    return aScore - bScore;
+                });
+                target = creep.pos.findClosestByPath(containers) || containers[0];
                 if (target) {
                     creep.memory.buildTarget = target.id;
                     creep.memory.isRepairTask = true;
                     isRepairTask = true;
                 }
             }
-            
-            // Second priority: Shared construction site (all builders work together)
+
+            // Second priority: Walls needing repair
+            if (!target) {
+                const defensesNeedingRepair = getDefensesNeedingRepair(creep.room);
+                if (defensesNeedingRepair.length > 0) {
+                    target = creep.pos.findClosestByPath(defensesNeedingRepair);
+                    if (target) {
+                        creep.memory.buildTarget = target.id;
+                        creep.memory.isRepairTask = true;
+                        isRepairTask = true;
+                    }
+                }
+            }
+
+            // Third priority: Shared construction site (all builders work together)
             if (!target) {
                 target = getSharedConstructionTarget(creep.room);
                 if (target) {
@@ -2615,11 +2792,18 @@ function runBuilder(creep) {
                 // Check if repair target is now at target hits
                 if (isRepairTask) {
                     const rcl = creep.room.controller.level;
-                    const targetHits = WALL_TARGET_HITS[rcl] || WALL_TARGET_HITS[1];
-                    if (target.structureType === STRUCTURE_WALL && target.hits >= targetHits) {
-                        // Defense structure is now at target level, clear assignment
-                        delete creep.memory.buildTarget;
-                        delete creep.memory.isRepairTask;
+                    if (target.structureType === STRUCTURE_WALL) {
+                        const targetHits = WALL_TARGET_HITS[rcl] || WALL_TARGET_HITS[1];
+                        if (target.hits >= targetHits) {
+                            delete creep.memory.buildTarget;
+                            delete creep.memory.isRepairTask;
+                        }
+                    } else if (target.structureType === STRUCTURE_RAMPART) {
+                        const rampartHits = RAMPART_TARGET_HITS[rcl] || RAMPART_TARGET_HITS[1];
+                        if (target.hits >= rampartHits) {
+                            delete creep.memory.buildTarget;
+                            delete creep.memory.isRepairTask;
+                        }
                     }
                 }
             } else if (actionResult !== OK) {
@@ -2638,29 +2822,80 @@ function runBuilder(creep) {
                 }
             }
         } else {
-            // No construction sites, help upgrade controller
+            // No construction sites or repairs - use builder energy to upgrade controller
             const controller = creep.room.controller;
             if (controller) {
                 const upgradeResult = creep.upgradeController(controller);
                 if (upgradeResult === ERR_NOT_IN_RANGE) {
-                    creep.moveTo(controller.pos, { visualizePathStyle: { stroke: '#ffffff' } });
-                } else if (upgradeResult !== OK && upgradeResult !== ERR_NOT_ENOUGH_RESOURCES) {
-                    console.log(`Builder upgrade error: ${upgradeResult} for creep ${creep.name}`);
+                    creep.moveTo(controller, { visualizePathStyle: { stroke: '#ffaa00' } });
+                }
+            } else {
+                // Fallback: idle near spawn if no controller found
+                const spawn = creep.room.find(FIND_MY_SPAWNS)[0];
+                if (spawn && creep.pos.getRangeTo(spawn) > 3) {
+                    creep.moveTo(spawn, { visualizePathStyle: { stroke: '#ffaa00' } });
                 }
             }
         }
     } else {
-        // Prioritize picking up dropped energy over containers
-        const droppedEnergy = creep.room.find(FIND_DROPPED_RESOURCES, {
+        // Prioritize picking up dropped energy close to where we're building first,
+        // then near our assigned source, then anywhere in the room.
+        const allDropped = creep.room.find(FIND_DROPPED_RESOURCES, {
             filter: (resource) => {
                 return resource.resourceType === RESOURCE_ENERGY && resource.amount >= 50;
             }
         });
-        
-        if (droppedEnergy.length > 0) {
-            const target = creep.pos.findClosestByPath(droppedEnergy);
-            if (creep.pickup(target) === ERR_NOT_IN_RANGE) {
+
+        let target = null;
+        if (allDropped.length > 0) {
+            // 1) Try dropped energy near current build target
+            if (creep.memory.buildTarget) {
+                const buildObj = Game.getObjectById(creep.memory.buildTarget);
+                if (buildObj) {
+                    const nearBuild = allDropped.filter(drop => drop.pos.getRangeTo(buildObj) <= 6);
+                    if (nearBuild.length > 0) {
+                        target = creep.pos.findClosestByPath(nearBuild);
+                    }
+                }
+            }
+
+            // 2) Try dropped energy near our assigned source
+            if (!target && creep.memory.assignedSource) {
+                const assignedSource = Game.getObjectById(creep.memory.assignedSource);
+                if (assignedSource) {
+                    const nearSource = allDropped.filter(drop => drop.pos.getRangeTo(assignedSource) <= 6);
+                    if (nearSource.length > 0) {
+                        target = creep.pos.findClosestByPath(nearSource);
+                    }
+                }
+            }
+
+            // 3) Fallback to closest dropped energy in the room
+            if (!target) {
+                target = creep.pos.findClosestByPath(allDropped);
+            }
+        }
+
+        if (target) {
+            const pickupResult = creep.pickup(target);
+            if (pickupResult === ERR_NOT_IN_RANGE) {
                 creep.moveTo(target, { visualizePathStyle: { stroke: '#ffaa00' } });
+            } else if (pickupResult === OK) {
+                // After picking up ground energy, if we still have free capacity,
+                // try to top up from a nearby source container (<=2 tiles).
+                if (creep.store.getFreeCapacity(RESOURCE_ENERGY) > 0) {
+                    const nearbyContainer = creep.pos.findClosestByRange(FIND_STRUCTURES, {
+                        filter: s => s.structureType === STRUCTURE_CONTAINER && s.store[RESOURCE_ENERGY] > 0 &&
+                                    // Only consider source containers (near sources)
+                                    creep.pos.getRangeTo(s.pos) <= 2
+                    });
+                    if (nearbyContainer) {
+                        const res = creep.withdraw(nearbyContainer, RESOURCE_ENERGY);
+                        if (res === ERR_NOT_IN_RANGE) {
+                            creep.moveTo(nearbyContainer, { visualizePathStyle: { stroke: '#ffaa00' } });
+                        }
+                    }
+                }
             }
         } else {
             // Fallback to containers and storage (exclude controller container)
@@ -2682,15 +2917,21 @@ function runBuilder(creep) {
             });
             
             if (targets.length > 0) {
-                // Use distributed container selection for balanced source usage
-                const target = getDistributedEnergyContainer(creep, targets);
+                // Use enhanced energy distribution that prioritizes ground energy
+                const energySource = getDistributedEnergyContainer(creep, targets);
                 
-                if (target) {
-                    const withdrawResult = creep.withdraw(target, RESOURCE_ENERGY);
-                    if (withdrawResult === ERR_NOT_IN_RANGE) {
-                        creep.moveTo(target, { visualizePathStyle: { stroke: '#ffaa00' } });
-                    } else if (withdrawResult !== OK && withdrawResult !== ERR_NOT_ENOUGH_RESOURCES) {
-                        console.log(`Builder withdraw error: ${withdrawResult}`);
+                if (energySource && energySource.target) {
+                    let result;
+                    if (energySource.actionType === 'pickup') {
+                        result = creep.pickup(energySource.target);
+                    } else {
+                        result = creep.withdraw(energySource.target, RESOURCE_ENERGY);
+                    }
+                    
+                    if (result === ERR_NOT_IN_RANGE) {
+                        creep.moveTo(energySource.target, { visualizePathStyle: { stroke: '#ffaa00' } });
+                    } else if (result !== OK && result !== ERR_NOT_ENOUGH_RESOURCES) {
+                        console.log(`Builder ${energySource.actionType} error: ${result}`);
                     }
                 }
             } else {
