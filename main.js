@@ -2334,28 +2334,41 @@ function runMiner(creep) {
   
     if (!source) return;
     
-    // Find container near this source
+    // Find container adjacent to this source (MUST be range 1 for harvesting)
     const container = creep.room.find(FIND_STRUCTURES, {
         filter: (structure) => {
             return structure.structureType === STRUCTURE_CONTAINER &&
-                   structure.pos.getRangeTo(source) <= 2;
+                   structure.pos.getRangeTo(source) === 1; // Exact range check
         }
     })[0];
 
     if (container) {
-        // Move to container position and stay there
+        // Valid adjacent container found - move to it and harvest
         if (creep.pos.isEqualTo(container.pos)) {
-            // We're on the container, just harvest
+            // We're on the container, harvest the source
             const harvestResult = creep.harvest(source);
-            if (harvestResult === ERR_NOT_IN_RANGE) {
-                // Container is not adjacent to source, this shouldn't happen
-                console.log(`Container not adjacent to source ${source.id}`);
+            if (harvestResult === ERR_NOT_ENOUGH_RESOURCES) {
+                // Source is depleted, wait on container
+                creep.say('⏸️');
+            } else if (harvestResult !== OK && harvestResult !== ERR_BUSY) {
+                console.log(`⚠️ ${creep.name}: Harvest error ${harvestResult} at source ${source.id}`);
             }
         } else {
-            // Move to container
+            // Move to the valid container
             creep.moveTo(container.pos, { visualizePathStyle: { stroke: '#ffaa00' } });
         }
     } else {
+        // No valid adjacent container - check if there's a badly placed one we should warn about
+        const badContainer = creep.room.find(FIND_STRUCTURES, {
+            filter: (structure) => {
+                return structure.structureType === STRUCTURE_CONTAINER &&
+                       structure.pos.getRangeTo(source) <= 3; // Within 3 tiles but not adjacent
+            }
+        })[0];
+        
+        if (badContainer && Game.time % 100 === 0) {
+            console.log(`⚠️ Container at ${badContainer.pos} is not adjacent to source ${source.id}! Miners will harvest without it.`);
+        }
         // No container yet, move to source and harvest normally
         // If creep is full, move away from source to drop energy for haulers
         if (creep.store.getFreeCapacity() === 0) {
