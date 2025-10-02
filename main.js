@@ -67,6 +67,13 @@ const CONTAINER_REPAIR_PERCENT = 0.5; // repair if below 50% of hitsMax
 // is below this fraction of capacity, or when hostiles are present.
 const TOWER_REFILL_THRESHOLD = 0.5; // 50%
 
+// Creep recycling configuration
+const CREEP_RECYCLE_TTL = 50; // Recycle creeps when they have this many ticks left
+
+// Emergency mode thresholds
+const EMERGENCY_ENERGY_THRESHOLD = 300; // Spawn emergency creeps if energy is this low
+const CONTROLLER_DOWNGRADE_EMERGENCY = 5000; // Emergency if controller downgrade is this close
+
 module.exports.loop = function () {
     // Clean up memory
     for (const name in Memory.creeps) {
@@ -82,7 +89,29 @@ module.exports.loop = function () {
     const room = spawn.room;
     const sources = room.find(FIND_SOURCES);
     
-
+    // Cache structure lookups every 10 ticks for CPU optimization
+    if (!room._structureCache || Game.time % 10 === 0) {
+        room._structureCache = {
+            containers: room.find(FIND_STRUCTURES, {
+                filter: s => s.structureType === STRUCTURE_CONTAINER
+            }),
+            storage: room.find(FIND_STRUCTURES, {
+                filter: s => s.structureType === STRUCTURE_STORAGE
+            })[0],
+            terminal: room.find(FIND_STRUCTURES, {
+                filter: s => s.structureType === STRUCTURE_TERMINAL
+            })[0],
+            towers: room.find(FIND_MY_STRUCTURES, {
+                filter: s => s.structureType === STRUCTURE_TOWER
+            }),
+            links: room.find(FIND_MY_STRUCTURES, {
+                filter: s => s.structureType === STRUCTURE_LINK
+            }),
+            roads: room.find(FIND_STRUCTURES, {
+                filter: s => s.structureType === STRUCTURE_ROAD
+            })
+        };
+    }
     
     // Count creeps by role
     const creeps = {
@@ -92,7 +121,11 @@ module.exports.loop = function () {
         builder: _.filter(Game.creeps, creep => creep.memory.role === 'builder')
     };
 
-
+    // Check for emergency situations
+    const emergency = detectEmergency(room, creeps);
+    if (emergency.isEmergency && Game.time % 10 === 0) {
+        console.log(`🚨 EMERGENCY MODE: ${emergency.reason}`);
+    }
 
     // Plan base layout once
     if (!room.memory.basePlanned) {
@@ -119,9 +152,14 @@ module.exports.loop = function () {
     if (Game.time % 20 === 0) {
         cleanupSharedConstructionTarget(room);
     }
+    
+    // Clean up memory for built structures every 100 ticks
+    if (Game.time % 100 === 0) {
+        cleanupBuiltStructures(room);
+    }
 
     // Spawn creeps based on needs
-    spawnCreeps(spawn, creeps);
+    spawnCreeps(spawn, creeps, sources, emergency);
 
     // Display clean status dashboard every 20 ticks
     if (Game.time % 20 === 0) {
@@ -131,10 +169,22 @@ module.exports.loop = function () {
     // Run creep logic
     for (const name in Game.creeps) {
         const creep = Game.creeps[name];
+        
+        // Check if creep should be recycled
+        if (shouldRecycleCreep(creep, room)) {
+            recycleCreep(creep, spawn);
+            continue; // Skip normal behavior
+        }
+        
         runCreep(creep);
     }
 
-    // Run tower defense
+    // Run link transfer logic
+    if (room._structureCache.links.length > 0 && Game.time % 5 === 0) {
+        runLinks(room);
+    }
+
+    // Run tower defense and repair
     runTowers(room);
 
     // Visualize base plan every tick for debugging (toggle with VISUALIZE_BASE constant)
@@ -142,21 +192,8 @@ module.exports.loop = function () {
         visualizeBasePlan(room);
     }
     
-    // Force redistribution of unassigned creeps every tick
-    const energyCreeps = _.filter(Game.creeps, c => 
-        (c.memory.role === 'hauler' || c.memory.role === 'builder' || c.memory.role === 'upgrader') &&
-        !c.memory.assignedSource
-    );
-    
-    if (energyCreeps.length > 0) {
-        console.log(`🔄 Assigning ${energyCreeps.length} unassigned energy creeps...`);
-        
-        energyCreeps.forEach((creep, index) => {
-            const sourceIndex = index % sources.length;
-            creep.memory.assignedSource = sources[sourceIndex].id;
-            console.log(`${creep.name} (${creep.memory.role}): Assigned to source ${sources[sourceIndex].id.substr(-4)}`);
-        });
-    }
+    // REMOVED: Force redistribution of unassigned creeps
+    // This is now handled during spawn with source assignment
 
     // CPU management for Pixel earning
     manageCPUForPixels();
@@ -1214,8 +1251,198 @@ function getLeastUtilizedSource(room) {
     return leastUtilizedSource;
 }
 
+// Get or calculate cached distance metrics for throughput calculations
+function getCachedDistanceMetrics(room) {
+    // Check if we have cached metrics and they're still valid
+    if (room.memory.distanceMetrics && 
+        room.memory.distanceMetrics.calculatedAt && 
+        Game.time - room.memory.distanceMetrics.calculatedAt < 1500) {
+        return room.memory.distanceMetrics;
+    }
+    
+    // Calculate fresh metrics
+    const spawn = room.find(FIND_MY_SPAWNS)[0];
+    if (!spawn) return null;
+    
+    const sources = room.find(FIND_SOURCES);
+    let totalDistance = 0;
+    
+    sources.forEach(source => {
+        const path = PathFinder.search(spawn.pos, { pos: source.pos, range: 1 }, {
+            roomCallback: () => createRoadPlanningCostMatrix(room),
+            maxRooms: 1
+        });
+        totalDistance += path.cost;
+    });
+    
+    const avgDistance = totalDistance / sources.length;
+    const roundTripTime = 2 * avgDistance + 4;
+    const carryPerHauler = Math.ceil((2/5) * roundTripTime);
+    
+    // Cache the results
+    room.memory.distanceMetrics = {
+        avgDistance,
+        roundTripTime,
+        carryPerHauler,
+        calculatedAt: Game.time
+    };
+    
+    console.log(`📐 Distance metrics cached: avgDist=${avgDistance.toFixed(1)}, Trtt=${roundTripTime.toFixed(1)}, carry=${carryPerHauler}`);
+    
+    return room.memory.distanceMetrics;
+}
+
+// Detect emergency situations that require immediate response
+function detectEmergency(room, creeps) {
+    const emergency = {
+        isEmergency: false,
+        reason: '',
+        priority: 'none'
+    };
+    
+    // Check 1: Controller about to downgrade
+    if (room.controller.ticksToDowngrade < CONTROLLER_DOWNGRADE_EMERGENCY) {
+        emergency.isEmergency = true;
+        emergency.reason = `Controller downgrade in ${room.controller.ticksToDowngrade} ticks`;
+        emergency.priority = 'critical';
+        return emergency;
+    }
+    
+    // Check 2: No miners alive (energy production stopped)
+    if (creeps.miner.length === 0) {
+        emergency.isEmergency = true;
+        emergency.reason = 'No miners alive';
+        emergency.priority = 'critical';
+        return emergency;
+    }
+    
+    // Check 3: Spawn almost dead
+    const spawn = room.find(FIND_MY_SPAWNS)[0];
+    if (spawn && spawn.hits < spawn.hitsMax * 0.3) {
+        emergency.isEmergency = true;
+        emergency.reason = 'Spawn heavily damaged';
+        emergency.priority = 'high';
+        return emergency;
+    }
+    
+    // Check 4: Very low energy and no haulers
+    if (room.energyAvailable < EMERGENCY_ENERGY_THRESHOLD && creeps.hauler.length === 0) {
+        emergency.isEmergency = true;
+        emergency.reason = 'Low energy and no haulers';
+        emergency.priority = 'high';
+        return emergency;
+    }
+    
+    return emergency;
+}
+
+// Clean up memory for structures that have been built
+function cleanupBuiltStructures(room) {
+    if (!room.memory.plannedStructures) return;
+    
+    const initialCount = room.memory.plannedStructures.length;
+    
+    room.memory.plannedStructures = room.memory.plannedStructures.filter(planned => {
+        // Check if a structure exists at this position
+        const structures = room.lookForAt(LOOK_STRUCTURES, planned.x, planned.y);
+        const exists = structures.some(s => s.structureType === planned.type);
+        
+        // Keep if not built yet
+        return !exists;
+    });
+    
+    const removed = initialCount - room.memory.plannedStructures.length;
+    if (removed > 0) {
+        console.log(`🧹 Cleaned up ${removed} built structures from memory`);
+    }
+}
+
+// Run link energy transfer logic
+function runLinks(room) {
+    const links = room._structureCache.links;
+    if (links.length < 2) return; // Need at least 2 links
+    
+    // Find source links (near sources) and sink links (near spawn/controller)
+    const sources = room.find(FIND_SOURCES);
+    const spawn = room.find(FIND_MY_SPAWNS)[0];
+    const controller = room.controller;
+    
+    const sourceLinks = [];
+    const sinkLinks = [];
+    
+    links.forEach(link => {
+        // Check if near a source
+        const nearSource = sources.some(source => link.pos.getRangeTo(source) <= 2);
+        if (nearSource) {
+            sourceLinks.push(link);
+        } else {
+            // Check if near spawn or controller
+            const nearSpawn = spawn && link.pos.getRangeTo(spawn) <= 3;
+            const nearController = controller && link.pos.getRangeTo(controller) <= 3;
+            if (nearSpawn || nearController) {
+                sinkLinks.push(link);
+            }
+        }
+    });
+    
+    // Transfer energy from full source links to empty sink links
+    sourceLinks.forEach(sourceLink => {
+        if (sourceLink.store[RESOURCE_ENERGY] >= 400 && sourceLink.cooldown === 0) {
+            // Find sink link with most free space
+            const targetLink = _.min(sinkLinks, link => link.store[RESOURCE_ENERGY]);
+            if (targetLink && targetLink.store[RESOURCE_ENERGY] < 400) {
+                const result = sourceLink.transferEnergy(targetLink);
+                if (result === OK) {
+                    console.log(`🔗 Link transfer: ${sourceLink.store[RESOURCE_ENERGY]} energy sent`);
+                }
+            }
+        }
+    });
+}
+
+// Check if a creep should be recycled (old age or replacement ready)
+function shouldRecycleCreep(creep, room) {
+    // Don't recycle if creep has no TTL (shouldn't happen but be safe)
+    if (!creep.ticksToLive) return false;
+    
+    // Don't recycle during emergency
+    const spawn = room.find(FIND_MY_SPAWNS)[0];
+    if (!spawn || spawn.spawning) return false;
+    
+    // Calculate distance to spawn for return trip estimate
+    const distanceToSpawn = creep.pos.getRangeTo(spawn);
+    
+    // Recycle if creep won't make it back to spawn for recycling
+    // Add buffer to ensure they make it back with time to spare
+    if (creep.ticksToLive < distanceToSpawn + 10) {
+        return false; // Too late to recycle, let them die
+    }
+    
+    // Recycle if within recycle window
+    return creep.ticksToLive <= CREEP_RECYCLE_TTL;
+}
+
+// Recycle a creep at the spawn
+function recycleCreep(creep, spawn) {
+    // Mark creep as recycling
+    if (!creep.memory.recycling) {
+        creep.memory.recycling = true;
+        creep.say('♻️');
+    }
+    
+    // Move to spawn and recycle
+    if (creep.pos.isNearTo(spawn)) {
+        spawn.recycleCreep(creep);
+    } else {
+        creep.moveTo(spawn, { 
+            visualizePathStyle: { stroke: '#00ff00', opacity: 0.5 },
+            reusePath: 20
+        });
+    }
+}
+
 // Simplified population control based on room controller level
-function spawnCreeps(spawn, creeps) {
+function spawnCreeps(spawn, creeps, sources, emergency) {
     const room = spawn.room;
     const rcl = room.controller.level;
     const energyCapacity = room.energyCapacityAvailable;
@@ -1264,10 +1491,20 @@ function spawnCreeps(spawn, creeps) {
             }
             
             if (energyAvailable >= costToUse) {
+                // Find unassigned source for this miner
+                const assignedSources = creeps.miner.map(m => m.memory.sourceId).filter(id => id);
+                const unassignedSource = sources.find(s => !assignedSources.includes(s.id));
+                const sourceId = unassignedSource ? unassignedSource.id : sources[creeps.miner.length % sources.length].id;
+                
                 const name = 'mine:' + generateHexId();
-                const result = spawn.spawnCreep(bodyToUse, name, { memory: { role: 'miner' } });
+                const result = spawn.spawnCreep(bodyToUse, name, { 
+                    memory: { 
+                        role: 'miner',
+                        sourceId: sourceId
+                    } 
+                });
                 if (result === OK) {
-                    console.log(`Spawning miner: ${name} (${costToUse}/${bodyCosts.miner} energy)`);
+                    console.log(`Spawning miner: ${name} @ source ${sourceId.substr(-4)} (${costToUse}/${bodyCosts.miner} energy)`);
                 }
                 return;
             }
@@ -1288,10 +1525,18 @@ function spawnCreeps(spawn, creeps) {
             }
             
             if (energyAvailable >= costToUse) {
+                // Assign source in round-robin fashion
+                const sourceId = sources[creeps.hauler.length % sources.length].id;
+                
                 const name = 'haul:' + generateHexId();
-                const result = spawn.spawnCreep(bodyToUse, name, { memory: { role: 'hauler' } });
+                const result = spawn.spawnCreep(bodyToUse, name, { 
+                    memory: { 
+                        role: 'hauler',
+                        assignedSource: sourceId
+                    } 
+                });
                 if (result === OK) {
-                    console.log(`Spawning hauler: ${name} (${costToUse}/${bodyCosts.hauler} energy)`);
+                    console.log(`Spawning hauler: ${name} @ source ${sourceId.substr(-4)} (${costToUse}/${bodyCosts.hauler} energy)`);
                 }
                 return;
             }
@@ -1312,10 +1557,18 @@ function spawnCreeps(spawn, creeps) {
             }
             
             if (energyAvailable >= costToUse) {
+                // Assign source in round-robin fashion
+                const sourceId = sources[creeps.upgrader.length % sources.length].id;
+                
                 const name = 'upgr:' + generateHexId();
-                const result = spawn.spawnCreep(bodyToUse, name, { memory: { role: 'upgrader' } });
+                const result = spawn.spawnCreep(bodyToUse, name, { 
+                    memory: { 
+                        role: 'upgrader',
+                        assignedSource: sourceId
+                    } 
+                });
                 if (result === OK) {
-                    console.log(`Spawning upgrader: ${name} (${costToUse}/${bodyCosts.upgrader} energy)`);
+                    console.log(`Spawning upgrader: ${name} @ source ${sourceId.substr(-4)} (${costToUse}/${bodyCosts.upgrader} energy)`);
                 }
                 return;
             }
@@ -1336,10 +1589,18 @@ function spawnCreeps(spawn, creeps) {
             }
             
             if (energyAvailable >= costToUse) {
+                // Assign source in round-robin fashion
+                const sourceId = sources[creeps.builder.length % sources.length].id;
+                
                 const name = 'bldr:' + generateHexId();
-                const result = spawn.spawnCreep(bodyToUse, name, { memory: { role: 'builder' } });
+                const result = spawn.spawnCreep(bodyToUse, name, { 
+                    memory: { 
+                        role: 'builder',
+                        assignedSource: sourceId
+                    } 
+                });
                 if (result === OK) {
-                    console.log(`Spawning builder: ${name} (${costToUse}/${bodyCosts.builder} energy)`);
+                    console.log(`Spawning builder: ${name} @ source ${sourceId.substr(-4)} (${costToUse}/${bodyCosts.builder} energy)`);
                 }
                 return;
             }
@@ -1357,23 +1618,13 @@ function getPopulationByRCL(rcl) {
     const room = spawn.room;
     const sources = room.find(FIND_SOURCES);
 
-    // Calculate average distance from spawn to sources for throughput math
-    let totalDistance = 0;
-    sources.forEach(source => {
-        const path = PathFinder.search(spawn.pos, { pos: source.pos, range: 1 }, {
-            roomCallback: () => createRoadPlanningCostMatrix(room),
-            maxRooms: 1
-        });
-        totalDistance += path.cost;
-    });
-    const avgDistance = totalDistance / sources.length;
-
-    // Throughput Math Implementation:
-    // Trtt = 2d + 4 (round-trip time formula)
-    const roundTripTime = 2 * avgDistance + 4;
-
-    // CARRY = Math.ceil((2/5) * Trtt) for optimal hauler sizing
-    const carryPerHauler = Math.ceil((2/5) * roundTripTime);
+    // Use cached distance metrics instead of recalculating every tick
+    const metrics = getCachedDistanceMetrics(room);
+    if (!metrics) return { miner: 2, hauler: 2, upgrader: 2, builder: 1 };
+    
+    const avgDistance = metrics.avgDistance;
+    const roundTripTime = metrics.roundTripTime;
+    const carryPerHauler = metrics.carryPerHauler;
 
     // Total energy flow: sources × 10 energy/tick = 20 energy/tick
     const totalEnergyFlow = sources.length * 10;
@@ -1401,11 +1652,38 @@ function getPopulationByRCL(rcl) {
         upgradersNeeded = Math.max(2, Math.floor(energyCapacity / 150));
         haulersTarget = Math.max(2, Math.floor(energyCapacity / 300));
     } else {
-        // Storage exists: reserve 30% for storage, use 70% for upgraders/haulers
-        const storageReserve = Math.floor(energyCapacity * 0.3);
-        const usableEnergy = Math.max(0, energyAvailable - storageReserve);
-        upgradersNeeded = Math.max(2, Math.floor(usableEnergy / 200));
-    haulersTarget = Math.max(Math.max(2, Math.floor(usableEnergy / 400)), haulersNeeded);
+        // Storage exists: dynamic scaling based on surplus
+        const storageEnergyPercent = storage.store[RESOURCE_ENERGY] / storage.storeCapacity;
+        
+        // Base upgrader count
+        let baseUpgraders = 2;
+        
+        // Scale up upgraders aggressively when storage is filling up
+        if (storageEnergyPercent > 0.8) {
+            // Storage nearly full - max upgraders
+            upgradersNeeded = Math.min(15, Math.floor(energyCapacity / 200) + 5);
+        } else if (storageEnergyPercent > 0.5) {
+            // Storage half full - increase upgraders
+            upgradersNeeded = Math.max(baseUpgraders, Math.floor(energyCapacity / 200) + 2);
+        } else if (storageEnergyPercent > 0.25) {
+            // Storage quarter full - moderate upgraders
+            upgradersNeeded = Math.max(baseUpgraders, Math.floor(energyCapacity / 250));
+        } else {
+            // Low storage - minimal upgraders
+            upgradersNeeded = baseUpgraders;
+        }
+        
+        // Reduce upgraders if controller is close to downgrade (emergency)
+        if (room.controller.ticksToDowngrade < 10000) {
+            upgradersNeeded = Math.max(upgradersNeeded, 3); // Ensure minimum when close to downgrade
+        }
+        
+        // Reduce upgraders significantly if at RCL8 (no more leveling needed)
+        if (rcl === 8 && room.controller.ticksToDowngrade > 100000) {
+            upgradersNeeded = 1; // Minimal maintenance at RCL8
+        }
+        
+        haulersTarget = Math.max(Math.max(2, Math.floor(energyCapacity / 400)), haulersNeeded);
 
         // If storage is full and terminal exists, prioritize selling excess
         if (terminal && storage.store[RESOURCE_ENERGY] > storage.storeCapacity * 0.95) {
@@ -1448,20 +1726,10 @@ function getBodiesByEnergyCapacity(energyCapacity) {
     }
 
     const room = spawn.room;
-    const sources = room.find(FIND_SOURCES);
-
-    // Calculate optimal hauler body based on throughput math
-    let totalDistance = 0;
-    sources.forEach(source => {
-        const path = PathFinder.search(spawn.pos, { pos: source.pos, range: 1 }, {
-            roomCallback: () => createRoadPlanningCostMatrix(room),
-            maxRooms: 1
-        });
-        totalDistance += path.cost;
-    });
-    const avgDistance = totalDistance / sources.length;
-    const roundTripTime = 2 * avgDistance + 4;
-    const carryNeeded = Math.ceil((2/5) * roundTripTime);
+    
+    // Use cached distance metrics instead of recalculating
+    const metrics = getCachedDistanceMetrics(room);
+    const carryNeeded = metrics ? metrics.carryPerHauler : Math.ceil(energyCapacity / 200);
 
     // Calculate optimal MOVE parts (roughly 1 MOVE per 2 CARRY for balanced ratio)
     const moveNeeded = Math.ceil(carryNeeded / 2);
@@ -2066,28 +2334,41 @@ function runMiner(creep) {
   
     if (!source) return;
     
-    // Find container near this source
+    // Find container adjacent to this source (MUST be range 1 for harvesting)
     const container = creep.room.find(FIND_STRUCTURES, {
         filter: (structure) => {
             return structure.structureType === STRUCTURE_CONTAINER &&
-                   structure.pos.getRangeTo(source) <= 2;
+                   structure.pos.getRangeTo(source) === 1; // Exact range check
         }
     })[0];
 
     if (container) {
-        // Move to container position and stay there
+        // Valid adjacent container found - move to it and harvest
         if (creep.pos.isEqualTo(container.pos)) {
-            // We're on the container, just harvest
+            // We're on the container, harvest the source
             const harvestResult = creep.harvest(source);
-            if (harvestResult === ERR_NOT_IN_RANGE) {
-                // Container is not adjacent to source, this shouldn't happen
-                console.log(`Container not adjacent to source ${source.id}`);
+            if (harvestResult === ERR_NOT_ENOUGH_RESOURCES) {
+                // Source is depleted, wait on container
+                creep.say('⏸️');
+            } else if (harvestResult !== OK && harvestResult !== ERR_BUSY) {
+                console.log(`⚠️ ${creep.name}: Harvest error ${harvestResult} at source ${source.id}`);
             }
         } else {
-            // Move to container
+            // Move to the valid container
             creep.moveTo(container.pos, { visualizePathStyle: { stroke: '#ffaa00' } });
         }
     } else {
+        // No valid adjacent container - check if there's a badly placed one we should warn about
+        const badContainer = creep.room.find(FIND_STRUCTURES, {
+            filter: (structure) => {
+                return structure.structureType === STRUCTURE_CONTAINER &&
+                       structure.pos.getRangeTo(source) <= 3; // Within 3 tiles but not adjacent
+            }
+        })[0];
+        
+        if (badContainer && Game.time % 100 === 0) {
+            console.log(`⚠️ Container at ${badContainer.pos} is not adjacent to source ${source.id}! Miners will harvest without it.`);
+        }
         // No container yet, move to source and harvest normally
         // If creep is full, move away from source to drop energy for haulers
         if (creep.store.getFreeCapacity() === 0) {
@@ -2703,13 +2984,50 @@ function getStructuresNeedingRepair(room) {
         }
     });
 
-    // Sort by most damaged first (lowest hit percentage) but ensure ramparts are prioritized by absolute deficit
+    // Priority tiers for tower repairs
+    const getPriority = (structure) => {
+        // Critical infrastructure (highest priority)
+        if (structure.structureType === STRUCTURE_SPAWN) return 1;
+        if (structure.structureType === STRUCTURE_TOWER) return 2;
+        if (structure.structureType === STRUCTURE_STORAGE) return 3;
+        if (structure.structureType === STRUCTURE_TERMINAL) return 4;
+        
+        // Important infrastructure
+        if (structure.structureType === STRUCTURE_CONTAINER) {
+            // Source/controller containers higher priority
+            const sources = room.find(FIND_SOURCES);
+            const controller = room.controller;
+            const nearSource = sources.some(s => structure.pos.getRangeTo(s) <= 2);
+            const nearController = controller && structure.pos.getRangeTo(controller) <= 3;
+            if (nearSource || nearController) return 5;
+            return 7;
+        }
+        
+        // Extensions
+        if (structure.structureType === STRUCTURE_EXTENSION) return 6;
+        
+        // Ramparts protecting critical structures
+        if (structure.structureType === STRUCTURE_RAMPART) return 8;
+        
+        // Roads
+        if (structure.structureType === STRUCTURE_ROAD) return 9;
+        
+        // Everything else
+        return 10;
+    };
+
+    // Sort by priority first, then by damage percentage
     return damagedStructures.sort((a, b) => {
+        const aPriority = getPriority(a);
+        const bPriority = getPriority(b);
+        
+        if (aPriority !== bPriority) {
+            return aPriority - bPriority;
+        }
+        
+        // Same priority - sort by damage percentage
         const aPercent = a.hits / a.hitsMax;
         const bPercent = b.hits / b.hitsMax;
-        // If one is a rampart and the other isn't, prioritize rampart if it's below its absolute target
-        if (a.structureType === STRUCTURE_RAMPART && b.structureType !== STRUCTURE_RAMPART) return -1;
-        if (b.structureType === STRUCTURE_RAMPART && a.structureType !== STRUCTURE_RAMPART) return 1;
         return aPercent - bPercent;
     });
 }
@@ -2754,7 +3072,38 @@ function runBuilder(creep) {
                 }
             }
 
-            // Second priority: Walls needing repair
+            // Second priority: Roads needing repair (decay over time)
+            if (!target) {
+                const roads = creep.room.find(FIND_STRUCTURES, {
+                    filter: s => s.structureType === STRUCTURE_ROAD && s.hits < s.hitsMax * 0.5
+                });
+                if (roads.length > 0) {
+                    // Repair roads near spawn, sources, or controller first
+                    const spawn = creep.room.find(FIND_MY_SPAWNS)[0];
+                    const sources = creep.room.find(FIND_SOURCES);
+                    roads.sort((a, b) => {
+                        const aDist = Math.min(
+                            spawn ? a.pos.getRangeTo(spawn) : 50,
+                            ...sources.map(s => a.pos.getRangeTo(s)),
+                            a.pos.getRangeTo(creep.room.controller)
+                        );
+                        const bDist = Math.min(
+                            spawn ? b.pos.getRangeTo(spawn) : 50,
+                            ...sources.map(s => b.pos.getRangeTo(s)),
+                            b.pos.getRangeTo(creep.room.controller)
+                        );
+                        return aDist - bDist;
+                    });
+                    target = creep.pos.findClosestByPath(roads) || roads[0];
+                    if (target) {
+                        creep.memory.buildTarget = target.id;
+                        creep.memory.isRepairTask = true;
+                        isRepairTask = true;
+                    }
+                }
+            }
+
+            // Third priority: Walls needing repair
             if (!target) {
                 const defensesNeedingRepair = getDefensesNeedingRepair(creep.room);
                 if (defensesNeedingRepair.length > 0) {
@@ -2767,7 +3116,7 @@ function runBuilder(creep) {
                 }
             }
 
-            // Third priority: Shared construction site (all builders work together)
+            // Fourth priority: Shared construction site (all builders work together)
             if (!target) {
                 target = getSharedConstructionTarget(creep.room);
                 if (target) {
