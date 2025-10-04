@@ -74,6 +74,33 @@ const CREEP_RECYCLE_TTL = 50; // Recycle creeps when they have this many ticks l
 const EMERGENCY_ENERGY_THRESHOLD = 300; // Spawn emergency creeps if energy is this low
 const CONTROLLER_DOWNGRADE_EMERGENCY = 5000; // Emergency if controller downgrade is this close
 
+/**
+ * Initialize remote room memory structure
+ */
+function initializeRemoteMemory() {
+    if (!Memory.remote) {
+        Memory.remote = {
+            rooms: {},          // Tracked remote rooms
+            scoutQueue: [],     // Rooms to scout
+            lastScout: 0        // Last scout tick
+        };
+    }
+}
+
+/**
+ * Get list of active remote rooms
+ */
+function getActiveRemoteRooms() {
+    initializeRemoteMemory();
+    
+    return Object.keys(Memory.remote.rooms)
+        .filter(roomName => Memory.remote.rooms[roomName].active)
+        .map(roomName => ({
+            name: roomName,
+            ...Memory.remote.rooms[roomName]
+        }));
+}
+
 module.exports.loop = function () {
     // Clean up memory
     for (const name in Memory.creeps) {
@@ -4034,19 +4061,6 @@ function getAdjacentRoomNames(roomName) {
 }
 
 /**
- * Initialize remote room memory structure
- */
-function initializeRemoteMemory() {
-    if (!Memory.remote) {
-        Memory.remote = {
-            rooms: {},          // Tracked remote rooms
-            scoutQueue: [],     // Rooms to scout
-            lastScout: 0        // Last scout tick
-        };
-    }
-}
-
-/**
  * Evaluate a room for remote harvesting suitability
  * Returns a score (higher is better) or null if unsuitable
  */
@@ -4337,20 +4351,6 @@ function selectRemoteRooms(homeRoom) {
         const nowActive = Object.keys(Memory.remote.rooms).filter(r => Memory.remote.rooms[r].active);
         console.log(`🌍 Remote rooms active: ${nowActive.length}/${maxRemoteRooms} (${nowActive.join(', ')})`);
     }
-}
-
-/**
- * Get list of active remote rooms
- */
-function getActiveRemoteRooms() {
-    initializeRemoteMemory();
-    
-    return Object.keys(Memory.remote.rooms)
-        .filter(roomName => Memory.remote.rooms[roomName].active)
-        .map(roomName => ({
-            name: roomName,
-            ...Memory.remote.rooms[roomName]
-        }));
 }
 
 /**
