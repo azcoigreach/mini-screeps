@@ -1,9 +1,9 @@
 
 # Mini-Screeps Bot - Throughput Optimized
 
-A minimal, self-contained Screeps bot focused on **Pixel earning** with advanced throughput optimization for maximum room efficiency. This bot operates autonomously in a single room with no expansion or remote operations, implementing mathematical throughput calculations for optimal energy flow.
+A minimal, self-contained Screeps bot focused on **Pixel earning** with advanced throughput optimization for maximum room efficiency. This bot operates autonomously with **remote harvesting** support (v1.2), implementing mathematical throughput calculations for optimal energy flow across multiple rooms.
 
-**Version**: 1.1.0 | **File**: `main.js` (~3400 lines) | **Dependencies**: None
+**Version**: 1.2.0 | **File**: `main.js` (~4000 lines) | **Dependencies**: None
 
 ## 🎯 **Primary Goals**
 
@@ -90,6 +90,35 @@ Spawn/Extensions → Upgraders/Builders → Controller/Construction
   - Builds construction sites when available
   - Helps upgrade controller when no construction or repair work exists
   - Count: 1-3 builders based on construction backlog
+
+### **Reserver** (v1.2, RCL 4+)
+- **Purpose**: Keep remote room controllers reserved for maximum energy production
+- **Body**: `2 CLAIM, 2 MOVE` (1300 energy)
+- **Behavior**:
+  - Travels to assigned remote room
+  - Continuously reserves the controller
+  - Respawns when < 1000 ticks remaining
+  - Count: 1 per active remote room
+
+### **Remote Miner** (v1.2, RCL 4+)
+- **Purpose**: Mine energy from remote room sources
+- **Body**: `5 WORK, 1 MOVE` (550 energy, same as local miners)
+- **Behavior**:
+  - Travels to assigned remote room source
+  - Parks on container (or adjacent if no container)
+  - Continuous mining like local miners
+  - Count: 1 per remote source (2-6 depending on remote rooms)
+
+### **Remote Builder** (v1.2, RCL 4+)
+- **Purpose**: Build and maintain infrastructure in remote rooms
+- **Body**: `3 WORK, 3 CARRY, 6 MOVE` (mobile, 900 energy)
+- **Behavior**:
+  - Gets energy from home room storage/containers
+  - Travels to remote room
+  - Builds containers and roads
+  - Repairs containers and roads (< 80% HP)
+  - Returns home when no work available
+  - Count: 1 per active remote room
 
 ## 🏘️ **Enhanced Base Layout**
 
@@ -226,10 +255,11 @@ Spawn/Extensions → Upgraders/Builders → Controller/Construction
 - **Structure caching** for CPU optimization
 - **Priority-based tower repairs** for critical infrastructure
 - **Road maintenance system** to preserve movement efficiency
+- **Remote harvesting** (v1.2): Automatic scouting, reservation, and mining of adjacent rooms (RCL 4+)
+- **Multi-spawn support** (v1.2): 2 spawns at RCL 7, 3 spawns at RCL 8 for faster creep production
 
 ### **❌ What It Doesn't Do**
-- No room expansion
-- No remote harvesting
+- No room claiming/expansion (only remote harvesting)
 - No Labs or Factories
 - No complex resource processing
 - No user interaction
@@ -353,7 +383,56 @@ These constants are defined near the top of `main.js` and can be adjusted for di
 - **Energy Flow**: Mathematical precision in allocation
 - **Pixel Generation**: More CPU available due to efficiency
 
+## 🌍 **Remote Harvesting System (v1.2)**
+
+### **Overview**
+The bot automatically scouts, evaluates, and harvests energy from adjacent rooms starting at RCL 4. This significantly increases energy throughput without claiming additional rooms.
+
+### **Features**
+- **Automatic Room Scouting**: Evaluates all 8 adjacent rooms based on:
+  - Number of sources (2 sources preferred over 1)
+  - Distance from home room
+  - Absence of hostile structures
+  - Terrain quality (plains preferred over swamps)
+- **Smart Room Selection**: Activates best rooms based on RCL:
+  - RCL 4-5: 1 remote room
+  - RCL 6-7: 2 remote rooms
+  - RCL 8: 3 remote rooms
+- **New Creep Roles**:
+  - **Reserver**: Keeps remote controllers reserved (2 CLAIM parts)
+  - **Remote Miner**: Harvests energy in remote rooms (5 WORK parts, parks on containers)
+  - **Remote Builder**: Builds and maintains containers/roads in remote rooms
+- **Infrastructure Planning**: Automatically plans containers at sources and roads back to home
+- **Energy Flow Integration**: Haulers automatically collect from remote rooms when local sources are depleted
+- **Throughput Calculations**: Spawns additional haulers based on remote source count and distance
+
+### **Energy Boost**
+- Each reserved remote source produces 10 energy/tick (same as local sources)
+- 1 remote room with 2 sources = +20 energy/tick
+- 3 remote rooms = up to +60 energy/tick total (3x home room production!)
+
+### **CPU Cost**
+- Minimal additional CPU (~5-10 CPU/tick)
+- Scouting runs every 100 ticks
+- Remote infrastructure planning every 50 ticks
+- Worth the investment for 3x energy income
+
 ## 📝 **Version History**
+
+### **v1.2.0** (October 4, 2025) - Remote Harvesting & Multi-Spawn
+- **Remote Harvesting System**: Automatic scouting, evaluation, and harvesting of adjacent rooms
+  - Activates at RCL 4 (when CLAIM parts become available)
+  - Scouts and ranks all 8 adjacent rooms by score (sources, distance, terrain)
+  - Automatically selects 1-3 best rooms based on RCL
+  - New creep roles: Reserver, Remote Miner, Remote Builder
+  - Plans and builds containers + roads in remote rooms
+  - Haulers automatically collect from remote rooms
+  - Energy throughput calculations include remote sources
+- **Multi-Spawn Support**: Added 2nd spawn at RCL 7, 3rd spawn at RCL 8
+  - Faster creep production for remote operations
+  - Better redundancy if spawn is damaged
+- **Energy Boost**: Up to 3x energy income with 3 remote rooms (60 additional energy/tick)
+- **Infrastructure Planning**: Automatic container and road planning for remote rooms
 
 ### **v1.1.0** (October 2, 2025) - Competitive Optimizations
 - **CPU Optimizations**: Structure caching, distance metrics caching, spawn pre-assignment (~8-15 CPU/tick savings)
