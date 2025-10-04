@@ -2213,7 +2213,7 @@ function getMaxStructuresByRCL(rcl, structureType) {
         [STRUCTURE_STORAGE]: [0, 0, 0, 0, 1, 1, 1, 1, 1][rcl] || 0,
         [STRUCTURE_LINK]: [0, 0, 0, 0, 0, 2, 3, 4, 6][rcl] || 0,
         [STRUCTURE_TERMINAL]: [0, 0, 0, 0, 0, 0, 0, 0, 1][rcl] || 0,
-        [STRUCTURE_SPAWN]: [0, 1, 1, 1, 1, 1, 1, 2, 3][rcl] || 0
+        [STRUCTURE_SPAWN]: [1, 1, 1, 1, 1, 1, 1, 2, 3][rcl] || 0
     };
     
     return limits[structureType] || 0;
@@ -2788,7 +2788,6 @@ function runHauler(creep) {
                 
                 if (result === ERR_NOT_IN_RANGE) {
                     creep.moveTo(energySource.target, { visualizePathStyle: { stroke: '#ffaa00' } });
-                    }
                 }
             } else {
                 // No energy in local containers (or low energy) - check remote rooms
@@ -2862,7 +2861,7 @@ function runHauler(creep) {
                 }
             }
         } else {
-                    // No remote rooms, check for dropped energy in home room
+            // No remote rooms, check for dropped energy in home room
             const droppedEnergy = creep.room.find(FIND_DROPPED_RESOURCES, {
                 filter: (resource) => {
                     return resource.resourceType === RESOURCE_ENERGY && resource.amount >= 50;
@@ -2972,7 +2971,7 @@ function runHauler(creep) {
                     if (target) {
                         if (creep.pickup(target) === ERR_NOT_IN_RANGE) {
                             creep.moveTo(target, { visualizePathStyle: { stroke: '#ffaa00' } });
-            } else {
+                        } else {
                             delete creep.memory.targetRemoteContainer;
                         }
                     }
@@ -4225,7 +4224,7 @@ function scoutAdjacentRooms(homeRoom) {
             if (evaluation.score > 0) {
                 suitable++;
                 console.log(`  ✅ ${roomName}: Score ${evaluation.score} (${evaluation.sources} sources, ${evaluation.avgDistance} tiles, ${evaluation.swampPercent}% swamp)`);
-    } else {
+            } else {
                 console.log(`  ❌ ${roomName}: ${evaluation.reason}`);
             }
         }
@@ -4885,4 +4884,5 @@ function manageCPUForPixels() {
             console.log(`CPU: ${cpuUsed.toFixed(2)}/${cpuLimit}, Bucket: ${cpuBucket} (Local Server - No Pixel Generation)`);
         }
     }
+}
 }
