@@ -74,181 +74,6 @@ const CREEP_RECYCLE_TTL = 50; // Recycle creeps when they have this many ticks l
 const EMERGENCY_ENERGY_THRESHOLD = 300; // Spawn emergency creeps if energy is this low
 const CONTROLLER_DOWNGRADE_EMERGENCY = 5000; // Emergency if controller downgrade is this close
 
-/**
- * Initialize remote room memory structure
- */
-function initializeRemoteMemory() {
-    if (!Memory.remote) {
-        Memory.remote = {
-            rooms: {},          // Tracked remote rooms
-            scoutQueue: [],     // Rooms to scout
-            lastScout: 0        // Last scout tick
-        };
-    }
-}
-
-/**
- * Get adjacent room names from a given room name
- * E.g., "E5N5" returns ["E4N4", "E4N5", "E4N6", "E5N4", "E5N6", "E6N4", "E6N5", "E6N6"]
- */
-function getAdjacentRoomNames(roomName) {
-    const parsed = /^([WE])(\d+)([NS])(\d+)$/.exec(roomName);
-    if (!parsed) return [];
-    
-    const [, ew, x, ns, y] = parsed;
-    const xNum = parseInt(x);
-    const yNum = parseInt(y);
-    
-    const adjacentRooms = [];
-    
-    // Generate all 8 adjacent room names
-    for (let dx = -1; dx <= 1; dx++) {
-        for (let dy = -1; dy <= 1; dy++) {
-            if (dx === 0 && dy === 0) continue; // Skip current room
-            
-            let newX = xNum + (ew === 'E' ? dx : -dx);
-            let newY = yNum + (ns === 'N' ? dy : -dy);
-            let newEW = ew;
-            let newNS = ns;
-            
-            // Handle coordinate wraparound at 0
-            if (newX < 0) {
-                newX = Math.abs(newX) - 1;
-                newEW = (ew === 'E') ? 'W' : 'E';
-            }
-            if (newY < 0) {
-                newY = Math.abs(newY) - 1;
-                newNS = (ns === 'N') ? 'S' : 'N';
-            }
-            
-            adjacentRooms.push(`${newEW}${newX}${newNS}${newY}`);
-        }
-    }
-    
-    return adjacentRooms;
-}
-
-/**
- * Get list of active remote rooms
- */
-function getActiveRemoteRooms() {
-    initializeRemoteMemory();
-    
-    return Object.keys(Memory.remote.rooms)
-        .filter(roomName => Memory.remote.rooms[roomName].active)
-        .map(roomName => ({
-            name: roomName,
-            ...Memory.remote.rooms[roomName]
-        }));
-}
-
-/**
- * Scout adjacent rooms and evaluate them for remote harvesting
- */
-function scoutAdjacentRooms(homeRoom) {
-    initializeRemoteMemory();
-    
-    const rcl = homeRoom.controller.level;
-    
-    // Only start scouting at RCL 4 (when we can make reservers)
-    if (rcl < 4) return;
-    
-    // Scout every 100 ticks
-    if (Game.time - Memory.remote.lastScout < 100) return;
-    
-    Memory.remote.lastScout = Game.time;
-    
-    console.log(`🔍 Remote harvesting scouting system active (RCL ${rcl})`);
-    
-    // TODO: Full implementation will be moved from later in the file
-    // For now, just ensure the function exists to prevent ReferenceError
-}
-
-/**
- * Update remote room information (reservation status, threats, etc.)
- */
-function updateRemoteRoomInfo(roomName) {
-    const room = Game.rooms[roomName];
-    if (!room || !Memory.remote.rooms[roomName]) return;
-    
-    const remoteData = Memory.remote.rooms[roomName];
-    
-    // Update reservation status
-    if (room.controller && room.controller.reservation) {
-        remoteData.reservation = {
-            username: room.controller.reservation.username,
-            ticksToEnd: room.controller.reservation.ticksToEnd
-        };
-    } else {
-        remoteData.reservation = null;
-    }
-    
-    // Check for threats
-    const hostiles = room.find(FIND_HOSTILE_CREEPS);
-    const invaderCores = room.find(FIND_HOSTILE_STRUCTURES, {
-        filter: s => s.structureType === STRUCTURE_INVADER_CORE
-    });
-    
-    remoteData.threats = hostiles.length + invaderCores.length;
-    remoteData.lastUpdate = Game.time;
-    
-    // Update source info if not already set
-    if (!remoteData.sourceIds) {
-        const sources = room.find(FIND_SOURCES);
-        remoteData.sourceIds = sources.map(s => s.id);
-    }
-}
-
-/**
- * Remote miner behavior - mines energy in remote rooms
- */
-function runRemoteMiner(creep) {
-    const sourceId = creep.memory.sourceId;
-    const targetRoomName = creep.memory.targetRoom;
-    
-    if (!sourceId || !targetRoomName) {
-        console.log(`⚠️ Remote miner ${creep.name} missing sourceId or targetRoom!`);
-        return;
-    }
-    
-    // Move to target room if not there
-    if (creep.room.name !== targetRoomName) {
-        const exitDir = creep.room.findExitTo(targetRoomName);
-        const exit = creep.pos.findClosestByPath(exitDir);
-        if (exit) {
-            creep.moveTo(exit, { visualizePathStyle: { stroke: '#ffaa00' } });
-        }
-        return;
-    }
-    
-    // We're in the target room - mine the source
-    const source = Game.getObjectById(sourceId);
-    if (!source) {
-        console.log(`⚠️ Remote miner ${creep.name} can't find source ${sourceId}!`);
-        return;
-    }
-    
-    // Check if there's a container at the source
-    const containers = source.pos.findInRange(FIND_STRUCTURES, 1, {
-        filter: s => s.structureType === STRUCTURE_CONTAINER
-    });
-    
-    if (containers.length > 0) {
-        const container = containers[0];
-        // Move to container and mine
-        if (!creep.pos.isEqualTo(container.pos)) {
-            creep.moveTo(container.pos, { visualizePathStyle: { stroke: '#ffaa00' } });
-        } else {
-            creep.harvest(source);
-        }
-    } else {
-        // No container yet - mine next to source
-        if (creep.harvest(source) === ERR_NOT_IN_RANGE) {
-            creep.moveTo(source, { visualizePathStyle: { stroke: '#ffaa00' } });
-        }
-    }
-}
-
 module.exports.loop = function () {
     // Clean up memory
     for (const name in Memory.creeps) {
@@ -302,10 +127,10 @@ module.exports.loop = function () {
         hauler: _.filter(Game.creeps, creep => creep.memory.role === 'hauler'),
         upgrader: _.filter(Game.creeps, creep => creep.memory.role === 'upgrader'),
         builder: _.filter(Game.creeps, creep => creep.memory.role === 'builder'),
-        scout: _.filter(Game.creeps, creep => creep.memory.role === 'scout'),
-        reserver: _.filter(Game.creeps, creep => creep.memory.role === 'reserver'),
+            scout: _.filter(Game.creeps, creep => creep.memory.role === 'scout'),
+            reserver: _.filter(Game.creeps, creep => creep.memory.role === 'reserver'),
         remoteMiner: _.filter(Game.creeps, creep => creep.memory.role === 'remoteMiner'),
-        remoteBuilder: _.filter(Game.creeps, creep => creep.memory.role === 'remoteBuilder')
+            remoteBuilder: _.filter(Game.creeps, creep => creep.memory.role === 'remoteBuilder')
     };
 
     // Check for emergency situations
@@ -2388,7 +2213,7 @@ function getMaxStructuresByRCL(rcl, structureType) {
         [STRUCTURE_STORAGE]: [0, 0, 0, 0, 1, 1, 1, 1, 1][rcl] || 0,
         [STRUCTURE_LINK]: [0, 0, 0, 0, 0, 2, 3, 4, 6][rcl] || 0,
         [STRUCTURE_TERMINAL]: [0, 0, 0, 0, 0, 0, 0, 0, 1][rcl] || 0,
-        [STRUCTURE_SPAWN]: [1, 1, 1, 1, 1, 1, 1, 2, 3][rcl] || 0
+        [STRUCTURE_SPAWN]: [0, 1, 1, 1, 1, 1, 1, 2, 3][rcl] || 0
     };
     
     return limits[structureType] || 0;
@@ -2963,6 +2788,7 @@ function runHauler(creep) {
                 
                 if (result === ERR_NOT_IN_RANGE) {
                     creep.moveTo(energySource.target, { visualizePathStyle: { stroke: '#ffaa00' } });
+                    }
                 }
             } else {
                 // No energy in local containers (or low energy) - check remote rooms
@@ -3036,7 +2862,7 @@ function runHauler(creep) {
                 }
             }
         } else {
-            // No remote rooms, check for dropped energy in home room
+                    // No remote rooms, check for dropped energy in home room
             const droppedEnergy = creep.room.find(FIND_DROPPED_RESOURCES, {
                 filter: (resource) => {
                     return resource.resourceType === RESOURCE_ENERGY && resource.amount >= 50;
@@ -4209,6 +4035,19 @@ function getAdjacentRoomNames(roomName) {
 }
 
 /**
+ * Initialize remote room memory structure
+ */
+function initializeRemoteMemory() {
+    if (!Memory.remote) {
+        Memory.remote = {
+            rooms: {},          // Tracked remote rooms
+            scoutQueue: [],     // Rooms to scout
+            lastScout: 0        // Last scout tick
+        };
+    }
+}
+
+/**
  * Evaluate a room for remote harvesting suitability
  * Returns a score (higher is better) or null if unsuitable
  */
@@ -4498,6 +4337,55 @@ function selectRemoteRooms(homeRoom) {
     if (changesMade) {
         const nowActive = Object.keys(Memory.remote.rooms).filter(r => Memory.remote.rooms[r].active);
         console.log(`🌍 Remote rooms active: ${nowActive.length}/${maxRemoteRooms} (${nowActive.join(', ')})`);
+    }
+}
+
+/**
+ * Get list of active remote rooms
+ */
+function getActiveRemoteRooms() {
+    initializeRemoteMemory();
+    
+    return Object.keys(Memory.remote.rooms)
+        .filter(roomName => Memory.remote.rooms[roomName].active)
+        .map(roomName => ({
+            name: roomName,
+            ...Memory.remote.rooms[roomName]
+        }));
+}
+
+/**
+ * Update remote room information (reservation status, threats, etc.)
+ */
+function updateRemoteRoomInfo(roomName) {
+    const room = Game.rooms[roomName];
+    if (!room || !Memory.remote.rooms[roomName]) return;
+    
+    const remoteData = Memory.remote.rooms[roomName];
+    
+    // Update reservation status
+    if (room.controller && room.controller.reservation) {
+        remoteData.reservation = {
+            username: room.controller.reservation.username,
+            ticksToEnd: room.controller.reservation.ticksToEnd
+        };
+    } else {
+        remoteData.reservation = null;
+    }
+    
+    // Check for threats
+    const hostiles = room.find(FIND_HOSTILE_CREEPS);
+    const invaderCores = room.find(FIND_HOSTILE_STRUCTURES, {
+        filter: s => s.structureType === STRUCTURE_INVADER_CORE
+    });
+    
+    remoteData.threats = hostiles.length + invaderCores.length;
+    remoteData.lastUpdate = Game.time;
+    
+    // Update source info if not already set
+    if (!remoteData.sourceIds) {
+        const sources = room.find(FIND_SOURCES);
+        remoteData.sourceIds = sources.map(s => s.id);
     }
 }
 
@@ -4995,7 +4883,6 @@ function manageCPUForPixels() {
         // Local server mode - just log CPU usage without Pixel generation
         if (Game.time % 100 === 0) {
             console.log(`CPU: ${cpuUsed.toFixed(2)}/${cpuLimit}, Bucket: ${cpuBucket} (Local Server - No Pixel Generation)`);
-        }
         }
     }
 }
