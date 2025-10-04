@@ -164,6 +164,41 @@ function scoutAdjacentRooms(homeRoom) {
     // For now, just ensure the function exists to prevent ReferenceError
 }
 
+/**
+ * Update remote room information (reservation status, threats, etc.)
+ */
+function updateRemoteRoomInfo(roomName) {
+    const room = Game.rooms[roomName];
+    if (!room || !Memory.remote.rooms[roomName]) return;
+    
+    const remoteData = Memory.remote.rooms[roomName];
+    
+    // Update reservation status
+    if (room.controller && room.controller.reservation) {
+        remoteData.reservation = {
+            username: room.controller.reservation.username,
+            ticksToEnd: room.controller.reservation.ticksToEnd
+        };
+    } else {
+        remoteData.reservation = null;
+    }
+    
+    // Check for threats
+    const hostiles = room.find(FIND_HOSTILE_CREEPS);
+    const invaderCores = room.find(FIND_HOSTILE_STRUCTURES, {
+        filter: s => s.structureType === STRUCTURE_INVADER_CORE
+    });
+    
+    remoteData.threats = hostiles.length + invaderCores.length;
+    remoteData.lastUpdate = Game.time;
+    
+    // Update source info if not already set
+    if (!remoteData.sourceIds) {
+        const sources = room.find(FIND_SOURCES);
+        remoteData.sourceIds = sources.map(s => s.id);
+    }
+}
+
 module.exports.loop = function () {
     // Clean up memory
     for (const name in Memory.creeps) {
@@ -4413,41 +4448,6 @@ function selectRemoteRooms(homeRoom) {
     if (changesMade) {
         const nowActive = Object.keys(Memory.remote.rooms).filter(r => Memory.remote.rooms[r].active);
         console.log(`🌍 Remote rooms active: ${nowActive.length}/${maxRemoteRooms} (${nowActive.join(', ')})`);
-    }
-}
-
-/**
- * Update remote room information (reservation status, threats, etc.)
- */
-function updateRemoteRoomInfo(roomName) {
-    const room = Game.rooms[roomName];
-    if (!room || !Memory.remote.rooms[roomName]) return;
-    
-    const remoteData = Memory.remote.rooms[roomName];
-    
-    // Update reservation status
-    if (room.controller && room.controller.reservation) {
-        remoteData.reservation = {
-            username: room.controller.reservation.username,
-            ticksToEnd: room.controller.reservation.ticksToEnd
-        };
-    } else {
-        remoteData.reservation = null;
-    }
-    
-    // Check for threats
-    const hostiles = room.find(FIND_HOSTILE_CREEPS);
-    const invaderCores = room.find(FIND_HOSTILE_STRUCTURES, {
-        filter: s => s.structureType === STRUCTURE_INVADER_CORE
-    });
-    
-    remoteData.threats = hostiles.length + invaderCores.length;
-    remoteData.lastUpdate = Game.time;
-    
-    // Update source info if not already set
-    if (!remoteData.sourceIds) {
-        const sources = room.find(FIND_SOURCES);
-        remoteData.sourceIds = sources.map(s => s.id);
     }
 }
 
