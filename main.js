@@ -127,10 +127,10 @@ module.exports.loop = function () {
         hauler: _.filter(Game.creeps, creep => creep.memory.role === 'hauler'),
         upgrader: _.filter(Game.creeps, creep => creep.memory.role === 'upgrader'),
         builder: _.filter(Game.creeps, creep => creep.memory.role === 'builder'),
-            scout: _.filter(Game.creeps, creep => creep.memory.role === 'scout'),
-            reserver: _.filter(Game.creeps, creep => creep.memory.role === 'reserver'),
+        scout: _.filter(Game.creeps, creep => creep.memory.role === 'scout'),
+        reserver: _.filter(Game.creeps, creep => creep.memory.role === 'reserver'),
         remoteMiner: _.filter(Game.creeps, creep => creep.memory.role === 'remoteMiner'),
-            remoteBuilder: _.filter(Game.creeps, creep => creep.memory.role === 'remoteBuilder')
+        remoteBuilder: _.filter(Game.creeps, creep => creep.memory.role === 'remoteBuilder')
     };
 
     // Check for emergency situations
