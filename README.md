@@ -109,6 +109,16 @@ Spawn/Extensions → Upgraders/Builders → Controller/Construction
   - Continuous mining like local miners
   - Count: 1 per remote source (2-6 depending on remote rooms)
 
+### **Scout** (v1.2, RCL 4+)
+- **Purpose**: Explore adjacent rooms to discover remote harvesting opportunities
+- **Body**: `3 MOVE` (fast, 150 energy)
+- **Behavior**:
+  - Travels to adjacent rooms one by one
+  - Explores each room for 50 ticks to gather intelligence
+  - Marks rooms as "scouted" for evaluation
+  - Auto-recycles when all 8 adjacent rooms explored
+  - Count: 1 scout (spawns when needed, recycles when done)
+
 ### **Remote Builder** (v1.2, RCL 4+)
 - **Purpose**: Build and maintain infrastructure in remote rooms
 - **Body**: `3 WORK, 3 CARRY, 6 MOVE` (mobile, 900 energy)
@@ -119,6 +129,16 @@ Spawn/Extensions → Upgraders/Builders → Controller/Construction
   - Repairs containers and roads (< 80% HP)
   - Returns home when no work available
   - Count: 1 per active remote room
+
+### **Remote Hauler** (v1.2, RCL 4+)
+- **Purpose**: Dedicated energy transport for remote rooms
+- **Body**: Same as regular haulers (scales with RCL: 1C1M at RCL 1-2, 2C2M at RCL 3-4, etc.)
+- **Behavior**:
+  - Shuttles between assigned remote room and home room
+  - Collects energy from remote source containers and dropped energy
+  - Delivers to spawn/extensions/storage/controller containers in home room
+  - Optimized for remote room energy transport
+  - Count: 1 per remote room with 2+ sources (only high-value rooms)
 
 ## 🏘️ **Enhanced Base Layout**
 
@@ -399,9 +419,11 @@ The bot automatically scouts, evaluates, and harvests energy from adjacent rooms
   - RCL 6-7: 2 remote rooms
   - RCL 8: 3 remote rooms
 - **New Creep Roles**:
+  - **Scout**: Explores adjacent rooms to discover remote harvesting opportunities
   - **Reserver**: Keeps remote controllers reserved (2 CLAIM parts)
   - **Remote Miner**: Harvests energy in remote rooms (5 WORK parts, parks on containers)
   - **Remote Builder**: Builds and maintains containers/roads in remote rooms
+  - **Remote Hauler**: Dedicated energy transport for high-value remote rooms
 - **Infrastructure Planning**: Automatically plans containers at sources and roads back to home
 - **Energy Flow Integration**: Haulers automatically collect from remote rooms when local sources are depleted
 - **Throughput Calculations**: Spawns additional haulers based on remote source count and distance
@@ -424,7 +446,7 @@ The bot automatically scouts, evaluates, and harvests energy from adjacent rooms
   - Activates at RCL 4 (when CLAIM parts become available)
   - Scouts and ranks all 8 adjacent rooms by score (sources, distance, terrain)
   - Automatically selects 1-3 best rooms based on RCL
-  - New creep roles: Reserver, Remote Miner, Remote Builder
+  - New creep roles: Scout, Reserver, Remote Miner, Remote Builder, Remote Hauler
   - Plans and builds containers + roads in remote rooms
   - Haulers automatically collect from remote rooms
   - Energy throughput calculations include remote sources

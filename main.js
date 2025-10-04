@@ -127,9 +127,10 @@ module.exports.loop = function () {
         hauler: _.filter(Game.creeps, creep => creep.memory.role === 'hauler'),
         upgrader: _.filter(Game.creeps, creep => creep.memory.role === 'upgrader'),
         builder: _.filter(Game.creeps, creep => creep.memory.role === 'builder'),
-        reserver: _.filter(Game.creeps, creep => creep.memory.role === 'reserver'),
+            scout: _.filter(Game.creeps, creep => creep.memory.role === 'scout'),
+            reserver: _.filter(Game.creeps, creep => creep.memory.role === 'reserver'),
         remoteMiner: _.filter(Game.creeps, creep => creep.memory.role === 'remoteMiner'),
-        remoteBuilder: _.filter(Game.creeps, creep => creep.memory.role === 'remoteBuilder')
+            remoteBuilder: _.filter(Game.creeps, creep => creep.memory.role === 'remoteBuilder')
     };
 
     // Check for emergency situations
@@ -1640,6 +1641,27 @@ function spawnCreeps(spawn, creeps, sources, emergency) {
         }
     }
     
+    // Scout spawning (RCL 4+)
+    if (rcl >= 4 && creeps.scout.length === 0) {
+        const scoutCost = bodies.scout ? bodies.scout.reduce((cost, part) => cost + 50, 0) : 150;
+        
+        if (energyAvailable >= scoutCost) {
+            const name = 'scout:' + generateHexId();
+            const result = spawn.spawnCreep(bodies.scout, name, {
+                memory: {
+                    role: 'scout',
+                    homeRoom: room.name,
+                    targetRoom: null,
+                    scoutedRooms: []
+                }
+            });
+            if (result === OK) {
+                console.log(`🔍 Spawning scout for remote room exploration (${scoutCost} energy)`);
+            }
+            return;
+        }
+    }
+    
     // Remote harvesting creeps (RCL 4+)
     if (rcl >= 4) {
         const activeRemoteRooms = getActiveRemoteRooms();
@@ -1656,9 +1678,31 @@ function spawnCreeps(spawn, creeps, sources, emergency) {
             for (const remoteRoom of activeRemoteRooms) {
                 const reserversForRoom = creeps.reserver.filter(c => c.memory.targetRoom === remoteRoom.name);
                 
-                // Need 1 reserver per room, respawn when reserver has < 1000 ticks left
-                const needReserver = reserversForRoom.length === 0 || 
-                    reserversForRoom.every(r => r.ticksToLive < 1000);
+                // Need 1 reserver per room, but be smarter about timing based on reservation status
+                let needReserver = false;
+                
+                if (reserversForRoom.length === 0) {
+                    // No reserver at all
+                    needReserver = true;
+                } else {
+                    // Check the actual room's reservation status
+                    const remoteRoomObj = Game.rooms[remoteRoom.name];
+                    if (remoteRoomObj && remoteRoomObj.controller) {
+                        const reservation = remoteRoomObj.controller.reservation;
+                        
+                        if (!reservation || reservation.username !== Memory.username) {
+                            // No reservation or not ours - need reserver
+                            needReserver = true;
+                        } else if (reservation.ticksToEnd < 1000) {
+                            // Reservation is getting low - need new reserver
+                            needReserver = true;
+                        }
+                        // If reservation has > 1000 ticks left, we're good
+                    } else {
+                        // No vision of room - assume we need a reserver
+                        needReserver = true;
+                    }
+                }
                 
                 if (needReserver && energyAvailable >= remoteCosts.reserver) {
                     const name = 'resv:' + generateHexId();
@@ -1670,7 +1714,11 @@ function spawnCreeps(spawn, creeps, sources, emergency) {
                         }
                     });
                     if (result === OK) {
-                        console.log(`🌍 Spawning reserver for ${remoteRoom.name} (${remoteCosts.reserver} energy)`);
+                        // Log reservation status for context
+                        const remoteRoomObj = Game.rooms[remoteRoom.name];
+                        const reservation = (remoteRoomObj && remoteRoomObj.controller && remoteRoomObj.controller.reservation);
+                        const ticksLeft = (reservation && reservation.ticksToEnd) || 0;
+                        console.log(`🌍 Spawning reserver for ${remoteRoom.name} (${remoteCosts.reserver} energy) - reservation: ${ticksLeft} ticks`);
                     }
                     return;
                 }
@@ -1719,6 +1767,29 @@ function spawnCreeps(spawn, creeps, sources, emergency) {
                         console.log(`🔨 Spawning remote builder for ${remoteRoom.name} (${remoteCosts.remoteBuilder} energy)`);
                     }
                     return;
+                }
+            }
+            
+            // Spawn dedicated remote haulers (1 per remote room with 2+ sources)
+            for (const remoteRoom of activeRemoteRooms) {
+                if (remoteRoom.sourceIds && remoteRoom.sourceIds.length >= 2) {
+                    const remoteHaulersForRoom = creeps.hauler.filter(c => c.memory.role === 'hauler' && c.memory.targetRemoteRoom === remoteRoom.name);
+                    
+                    if (remoteHaulersForRoom.length === 0 && energyAvailable >= bodyCosts.hauler) {
+                        const name = 'rhau:' + generateHexId();
+                        const result = spawn.spawnCreep(bodies.hauler, name, {
+                            memory: {
+                                role: 'hauler',
+                                targetRemoteRoom: remoteRoom.name,
+                                homeRoom: room.name,
+                                assignedSource: null // Will be assigned dynamically
+                            }
+                        });
+                        if (result === OK) {
+                            console.log(`🚛 Spawning dedicated remote hauler for ${remoteRoom.name} (${bodyCosts.hauler} energy)`);
+                        }
+                        return;
+                    }
                 }
             }
         }
@@ -1902,6 +1973,7 @@ function getBodiesByEnergyCapacity(energyCapacity) {
             hauler: affordableHaulerBody, // Throughput-calculated
             upgrader: [WORK, WORK, WORK, WORK, WORK, WORK, WORK, WORK, WORK, WORK, CARRY, CARRY, CARRY, MOVE, MOVE, MOVE], // 10W3C3M
             builder: [WORK, WORK, WORK, WORK, WORK, WORK, WORK, CARRY, CARRY, CARRY, CARRY, CARRY, MOVE, MOVE, MOVE, MOVE], // 7W5C4M
+            scout: [MOVE, MOVE, MOVE], // 3M - 150 energy (fast scouting)
             reserver: [CLAIM, CLAIM, MOVE, MOVE], // 2CLAIM 2M - 1300 energy
             remoteMiner: [WORK, WORK, WORK, WORK, WORK, MOVE], // 5W1M - same as local miner
             remoteBuilder: [WORK, WORK, WORK, CARRY, CARRY, CARRY, MOVE, MOVE, MOVE, MOVE, MOVE, MOVE] // 3W3C6M - mobile
@@ -1912,6 +1984,7 @@ function getBodiesByEnergyCapacity(energyCapacity) {
             hauler: affordableHaulerBody, // Throughput-calculated
             upgrader: [WORK, WORK, WORK, WORK, WORK, WORK, WORK, CARRY, CARRY, MOVE, MOVE], // 7W2C2M
             builder: [WORK, WORK, WORK, WORK, WORK, CARRY, CARRY, CARRY, CARRY, MOVE, MOVE, MOVE], // 5W4C3M
+            scout: [MOVE, MOVE, MOVE], // 3M - 150 energy
             reserver: [CLAIM, CLAIM, MOVE, MOVE], // 2CLAIM 2M
             remoteMiner: [WORK, WORK, WORK, WORK, WORK, MOVE], // 5W1M
             remoteBuilder: [WORK, WORK, WORK, CARRY, CARRY, CARRY, MOVE, MOVE, MOVE, MOVE, MOVE, MOVE] // 3W3C6M
@@ -1922,6 +1995,7 @@ function getBodiesByEnergyCapacity(energyCapacity) {
             hauler: affordableHaulerBody, // Throughput-calculated
             upgrader: [WORK, WORK, WORK, WORK, WORK, CARRY, CARRY, MOVE], // 5W2C1M
             builder: [WORK, WORK, WORK, WORK, CARRY, CARRY, CARRY, MOVE, MOVE], // 4W3C2M
+            scout: [MOVE, MOVE, MOVE], // 3M - 150 energy
             reserver: [CLAIM, CLAIM, MOVE, MOVE], // 2CLAIM 2M - 1300 energy (need to save up)
             remoteMiner: [WORK, WORK, WORK, WORK, WORK, MOVE], // 5W1M - 550 energy
             remoteBuilder: [WORK, WORK, CARRY, CARRY, MOVE, MOVE, MOVE, MOVE] // 2W2C4M - 500 energy
@@ -1983,8 +2057,27 @@ function createMissingConstructionSites(room) {
     // Sort planned structures by priority, with extensions sorted by distance to spawn
     const spawn = room.find(FIND_MY_SPAWNS)[0];
     const sortedPlannedStructures = [...room.memory.plannedStructures].sort((a, b) => {
-        // Priority order for structure types - extensions first!
-        const priorityOrder = [
+        // At RCL 4+, prioritize storage for remote harvesting
+        const isRCL4Plus = rcl >= 4;
+        
+        // Priority order for structure types
+        let priorityOrder;
+        if (isRCL4Plus) {
+            // At RCL 4+, storage is critical for remote harvesting - prioritize it!
+            priorityOrder = [
+                STRUCTURE_STORAGE,     // TOP PRIORITY at RCL 4+ for remote energy
+                STRUCTURE_EXTENSION,
+                STRUCTURE_SPAWN,
+                STRUCTURE_TOWER,
+                STRUCTURE_CONTAINER,
+                STRUCTURE_WALL,
+                STRUCTURE_ROAD,
+                STRUCTURE_LINK,
+                STRUCTURE_TERMINAL
+            ];
+        } else {
+            // Before RCL 4, extensions are most important
+            priorityOrder = [
             STRUCTURE_EXTENSION,
             STRUCTURE_SPAWN,
             STRUCTURE_STORAGE,
@@ -1995,6 +2088,7 @@ function createMissingConstructionSites(room) {
             STRUCTURE_LINK,
             STRUCTURE_TERMINAL
         ];
+        }
         
         const aPriority = priorityOrder.indexOf(a.type);
         const bPriority = priorityOrder.indexOf(b.type);
@@ -2072,6 +2166,10 @@ function createMissingConstructionSites(room) {
                 createdByType[planned.type] = (createdByType[planned.type] || 0) + 1;
                 if (planned.type === STRUCTURE_EXTENSION) {
                     extensionsCreated++;
+                }
+                // Special message for storage at RCL 4+ (critical for remote harvesting)
+                if (planned.type === STRUCTURE_STORAGE && rcl >= 4) {
+                    console.log(`📦 PRIORITY: Storage construction site created for remote harvesting energy!`);
                 }
             } else if (result !== ERR_RCL_NOT_ENOUGH) {
                 // Only log unexpected failures (not RCL gating)
@@ -2325,6 +2423,9 @@ function runCreep(creep) {
         case 'builder':
             runBuilder(creep);
             break;
+        case 'scout':
+            runScout(creep);
+            break;
         case 'reserver':
             runReserver(creep);
             break;
@@ -2519,8 +2620,32 @@ function runMiner(creep) {
 function runHauler(creep) {
     // Haulers move energy from source containers to spawn/extensions/storage
     
+    // Check if this is a dedicated remote hauler
+    const isRemoteHauler = creep.memory.targetRemoteRoom;
+    
+    if (isRemoteHauler) {
+        runRemoteHauler(creep);
+        return;
+    }
+    
     // If carrying energy, find a sink to deliver to
     if (creep.store[RESOURCE_ENERGY] > 0) {
+        // Check if we're in a remote room - if so, go home first
+        if (!creep.memory.homeRoom) {
+            creep.memory.homeRoom = creep.room.name;
+        }
+        
+        const homeRoom = creep.memory.homeRoom;
+        if (creep.room.name !== homeRoom) {
+            // We're in a remote room - go home to deliver
+            const exitDir = creep.room.findExitTo(homeRoom);
+            const exit = creep.pos.findClosestByPath(exitDir);
+            if (exit) {
+                creep.moveTo(exit, { visualizePathStyle: { stroke: '#ffffff' } });
+            }
+            return;
+        }
+        
         const spawn = creep.room.find(FIND_MY_SPAWNS)[0];
         
         // Find all potential targets
@@ -2546,6 +2671,7 @@ function runHauler(creep) {
         
         // Find source positions to identify source containers
         const sources = creep.room.find(FIND_SOURCES);
+        const controller = creep.room.controller;
         
         const containers = creep.room.find(FIND_STRUCTURES, {
             filter: (structure) => {
@@ -2558,7 +2684,27 @@ function runHauler(creep) {
                         return false; // This is a source container, skip it
                     }
                 }
-                return true; // This is a non-source container (like near spawn)
+                return true; // This is a non-source container (like near spawn or controller)
+            }
+        });
+        
+        // Find controller container specifically (for early game when storage isn't built yet)
+        const controllerContainers = creep.room.find(FIND_STRUCTURES, {
+            filter: (structure) => {
+                if (structure.structureType !== STRUCTURE_CONTAINER || structure.store.getFreeCapacity(RESOURCE_ENERGY) <= 0) {
+                    return false;
+                }
+                // Only controller containers (near controller, not near sources)
+                if (controller && structure.pos.getRangeTo(controller) <= 3) {
+                    // Make sure it's not a source container
+                    for (const source of sources) {
+                        if (structure.pos.getRangeTo(source) <= 2) {
+                            return false; // This is a source container
+                        }
+                    }
+                    return true; // This is a controller container
+                }
+                return false;
             }
         });
         
@@ -2575,13 +2721,17 @@ function runHauler(creep) {
         if (spawnTargets.length > 0) {
             target = creep.pos.findClosestByPath(spawnTargets);
         }
-        // Priority 2: Non-source containers (like near spawn for upgraders/builders)
-        else if (containers.length > 0) {
-            target = creep.pos.findClosestByPath(containers);
+        // Priority 2: Controller containers (keep upgraders supplied)
+        else if (controllerContainers.length > 0) {
+            target = creep.pos.findClosestByPath(controllerContainers);
         }
-        // Priority 3: Storage
+        // Priority 3: Storage (if available)
         else if (storage.length > 0) {
             target = creep.pos.findClosestByPath(storage);
+        }
+        // Priority 4: Other containers (like near spawn)
+        else if (containers.length > 0) {
+            target = creep.pos.findClosestByPath(containers);
         }
         
         if (target) {
@@ -2603,47 +2753,50 @@ function runHauler(creep) {
         
         // If in home room, check local sources first, then consider going to remote rooms
         if (isInHomeRoom) {
-            const sources = creep.room.find(FIND_SOURCES);
-            
+        const sources = creep.room.find(FIND_SOURCES);
+        
             // First try to find source containers with energy in home room
-            const sourceContainers = creep.room.find(FIND_STRUCTURES, {
-                filter: (structure) => {
-                    if (structure.structureType !== STRUCTURE_CONTAINER || structure.store[RESOURCE_ENERGY] <= 0) {
-                        return false;
-                    }
-                    // Only pick up from source containers
-                    for (const source of sources) {
-                        if (structure.pos.getRangeTo(source) <= 2) {
-                            return true; // This is a source container
-                        }
-                    }
-                    return false; // This is not a source container
+        const sourceContainers = creep.room.find(FIND_STRUCTURES, {
+            filter: (structure) => {
+                if (structure.structureType !== STRUCTURE_CONTAINER || structure.store[RESOURCE_ENERGY] <= 0) {
+                    return false;
                 }
-            });
-            
-            if (sourceContainers.length > 0) {
-                // Use enhanced distribution system
-                const energySource = getDistributedEnergyContainer(creep, sourceContainers);
-                
-                if (energySource && energySource.target) {
-                    let result;
-                    if (energySource.actionType === 'pickup') {
-                        result = creep.pickup(energySource.target);
-                    } else {
-                        result = creep.withdraw(energySource.target, RESOURCE_ENERGY);
+                // Only pick up from source containers
+                for (const source of sources) {
+                    if (structure.pos.getRangeTo(source) <= 2) {
+                        return true; // This is a source container
                     }
-                    
-                    if (result === ERR_NOT_IN_RANGE) {
-                        creep.moveTo(energySource.target, { visualizePathStyle: { stroke: '#ffaa00' } });
+                }
+                return false; // This is not a source container
+            }
+        });
+
+            // Check if local containers have meaningful energy (> 400 - let them build up for efficient hauler trips)
+            const localContainersWithEnergy = sourceContainers.filter(c => c.store[RESOURCE_ENERGY] > 400);
+            
+            if (localContainersWithEnergy.length > 0) {
+                // Use enhanced distribution system
+                const energySource = getDistributedEnergyContainer(creep, localContainersWithEnergy);
+            
+            if (energySource && energySource.target) {
+                let result;
+                if (energySource.actionType === 'pickup') {
+                    result = creep.pickup(energySource.target);
+                } else {
+                    result = creep.withdraw(energySource.target, RESOURCE_ENERGY);
+                }
+                
+                if (result === ERR_NOT_IN_RANGE) {
+                    creep.moveTo(energySource.target, { visualizePathStyle: { stroke: '#ffaa00' } });
                     }
                 }
             } else {
-                // No energy in local containers - check remote rooms
+                // No energy in local containers (or low energy) - check remote rooms
                 const activeRemoteRooms = getActiveRemoteRooms();
                 
                 if (activeRemoteRooms.length > 0) {
-                    // Find a remote room with energy available
-                    let bestRemoteContainer = null;
+                    // Find a remote room with energy available (containers or dropped)
+                    let bestRemoteTarget = null;
                     let bestAmount = 0;
                     
                     for (const remoteRoomData of activeRemoteRooms) {
@@ -2651,9 +2804,11 @@ function runHauler(creep) {
                         if (!remoteRoom) continue; // No vision
                         
                         const remoteSources = remoteRoom.find(FIND_SOURCES);
+                        
+                        // Check containers
                         const remoteContainers = remoteRoom.find(FIND_STRUCTURES, {
                             filter: (structure) => {
-                                if (structure.structureType !== STRUCTURE_CONTAINER || structure.store[RESOURCE_ENERGY] <= 100) {
+                                if (structure.structureType !== STRUCTURE_CONTAINER || structure.store[RESOURCE_ENERGY] <= 400) {
                                     return false;
                                 }
                                 // Only pick up from source containers
@@ -2669,29 +2824,52 @@ function runHauler(creep) {
                         for (const container of remoteContainers) {
                             if (container.store[RESOURCE_ENERGY] > bestAmount) {
                                 bestAmount = container.store[RESOURCE_ENERGY];
-                                bestRemoteContainer = container;
+                                bestRemoteTarget = container;
+                            }
+                        }
+                        
+                        // Also check dropped energy near sources (if no containers or low amounts)
+                        const droppedEnergy = remoteRoom.find(FIND_DROPPED_RESOURCES, {
+                            filter: (resource) => {
+                                if (resource.resourceType !== RESOURCE_ENERGY || resource.amount < 200) {
+                                    return false;
+                                }
+                                // Only near sources
+                                for (const source of remoteSources) {
+                                    if (resource.pos.getRangeTo(source) <= 3) {
+                                        return true;
+                                    }
+                                }
+                                return false;
+                            }
+                        });
+                        
+                        for (const dropped of droppedEnergy) {
+                            if (dropped.amount > bestAmount) {
+                                bestAmount = dropped.amount;
+                                bestRemoteTarget = dropped;
                             }
                         }
                     }
                     
-                    if (bestRemoteContainer) {
+                    if (bestRemoteTarget) {
                         // Go to remote room to collect energy
-                        creep.memory.targetRemoteContainer = bestRemoteContainer.id;
-                        const exitDir = creep.room.findExitTo(bestRemoteContainer.room.name);
+                        creep.memory.targetRemoteContainer = bestRemoteTarget.id;
+                        const exitDir = creep.room.findExitTo(bestRemoteTarget.room.name);
                         const exit = creep.pos.findClosestByPath(exitDir);
                         if (exit) {
                             creep.moveTo(exit, { visualizePathStyle: { stroke: '#ffaa00' } });
-                        }
-                    }
-                } else {
+                }
+            }
+        } else {
                     // No remote rooms, check for dropped energy in home room
-                    const droppedEnergy = creep.room.find(FIND_DROPPED_RESOURCES, {
-                        filter: (resource) => {
-                            return resource.resourceType === RESOURCE_ENERGY && resource.amount >= 50;
-                        }
-                    });
-                    
-                    if (droppedEnergy.length > 0) {
+            const droppedEnergy = creep.room.find(FIND_DROPPED_RESOURCES, {
+                filter: (resource) => {
+                    return resource.resourceType === RESOURCE_ENERGY && resource.amount >= 50;
+                }
+            });
+            
+            if (droppedEnergy.length > 0) {
                         const target = creep.pos.findClosestByPath(droppedEnergy);
                         if (target && creep.pickup(target) === ERR_NOT_IN_RANGE) {
                             creep.moveTo(target, { visualizePathStyle: { stroke: '#ffaa00' } });
@@ -2704,17 +2882,44 @@ function runHauler(creep) {
             const targetContainerId = creep.memory.targetRemoteContainer;
             
             if (targetContainerId) {
-                const targetContainer = Game.getObjectById(targetContainerId);
+                const target = Game.getObjectById(targetContainerId);
                 
-                if (targetContainer && targetContainer.store[RESOURCE_ENERGY] > 0) {
-                    if (creep.withdraw(targetContainer, RESOURCE_ENERGY) === ERR_NOT_IN_RANGE) {
-                        creep.moveTo(targetContainer, { visualizePathStyle: { stroke: '#ffaa00' } });
+                if (target) {
+                    let result;
+                    let hasEnergy = false;
+                    
+                    // Check if it's a container or dropped resource
+                    if (target.structureType === STRUCTURE_CONTAINER) {
+                        hasEnergy = target.store[RESOURCE_ENERGY] > 0;
+                        if (hasEnergy) {
+                            result = creep.withdraw(target, RESOURCE_ENERGY);
+                        }
+                    } else if (target.resourceType === RESOURCE_ENERGY) {
+                        // It's dropped energy
+                        hasEnergy = target.amount > 0;
+                        if (hasEnergy) {
+                            result = creep.pickup(target);
+                        }
+                    }
+                    
+                    if (hasEnergy) {
+                        if (result === ERR_NOT_IN_RANGE) {
+                            creep.moveTo(target, { visualizePathStyle: { stroke: '#ffaa00' } });
+                        } else if (result === OK) {
+                            // Successfully collected, clear target
+                            delete creep.memory.targetRemoteContainer;
+                        }
                     } else {
-                        // Successfully withdrew, clear target
+                        // Target is empty, return home
                         delete creep.memory.targetRemoteContainer;
+                        const exitDir = creep.room.findExitTo(homeRoomName);
+                        const exit = creep.pos.findClosestByPath(exitDir);
+                        if (exit) {
+                            creep.moveTo(exit, { visualizePathStyle: { stroke: '#ffaa00' } });
+                        }
                     }
                 } else {
-                    // Container is empty or doesn't exist, return home
+                    // Target doesn't exist anymore, return home
                     delete creep.memory.targetRemoteContainer;
                     const exitDir = creep.room.findExitTo(homeRoomName);
                     const exit = creep.pos.findClosestByPath(exitDir);
@@ -2723,7 +2928,7 @@ function runHauler(creep) {
                     }
                 }
             } else {
-                // No target container, look for any container in this room
+                // No target, look for any energy source in this room (containers or dropped)
                 const sources = creep.room.find(FIND_SOURCES);
                 const sourceContainers = creep.room.find(FIND_STRUCTURES, {
                     filter: (structure) => {
@@ -2739,17 +2944,40 @@ function runHauler(creep) {
                     }
                 });
                 
+                const droppedEnergy = creep.room.find(FIND_DROPPED_RESOURCES, {
+                    filter: (resource) => {
+                        if (resource.resourceType !== RESOURCE_ENERGY || resource.amount < 50) {
+                            return false;
+                        }
+                        for (const source of sources) {
+                            if (resource.pos.getRangeTo(source) <= 3) {
+                                return true;
+                            }
+                        }
+                        return false;
+                    }
+                });
+                
                 if (sourceContainers.length > 0) {
                     const target = creep.pos.findClosestByPath(sourceContainers);
                     if (target) {
                         if (creep.withdraw(target, RESOURCE_ENERGY) === ERR_NOT_IN_RANGE) {
-                            creep.moveTo(target, { visualizePathStyle: { stroke: '#ffaa00' } });
+                    creep.moveTo(target, { visualizePathStyle: { stroke: '#ffaa00' } });
                         } else {
                             delete creep.memory.targetRemoteContainer;
                         }
                     }
+                } else if (droppedEnergy.length > 0) {
+                    const target = creep.pos.findClosestByPath(droppedEnergy);
+                    if (target) {
+                        if (creep.pickup(target) === ERR_NOT_IN_RANGE) {
+                            creep.moveTo(target, { visualizePathStyle: { stroke: '#ffaa00' } });
+            } else {
+                            delete creep.memory.targetRemoteContainer;
+                        }
+                    }
                 } else {
-                    // No containers, return home
+                    // No energy available, return home
                     delete creep.memory.targetRemoteContainer;
                     const exitDir = creep.room.findExitTo(homeRoomName);
                     const exit = creep.pos.findClosestByPath(exitDir);
@@ -2757,6 +2985,273 @@ function runHauler(creep) {
                         creep.moveTo(exit, { visualizePathStyle: { stroke: '#ffaa00' } });
                     }
                 }
+            }
+        }
+    }
+}
+
+// Scout logic - explores adjacent rooms for remote harvesting
+function runScout(creep) {
+    const homeRoom = creep.memory.homeRoom;
+    const targetRoom = creep.memory.targetRoom;
+    const scoutedRooms = creep.memory.scoutedRooms || [];
+    
+    // If no target room assigned, get one from the scout queue
+    if (!targetRoom) {
+        const adjacentRooms = getAdjacentRoomNames(homeRoom);
+        const unscoutedRooms = adjacentRooms.filter(roomName => !scoutedRooms.includes(roomName));
+        
+        // Filter out unreachable rooms and temporarily blocked rooms
+        const reachableRooms = [];
+        const blockedRooms = creep.memory.blockedRooms || {};
+        
+        for (const roomName of unscoutedRooms) {
+            // Check if this room was recently blocked (within last 1000 ticks)
+            if (blockedRooms[roomName] && (Game.time - blockedRooms[roomName]) < 1000) {
+                console.log(`🚫 Scout ${creep.name} skipping temporarily blocked room ${roomName} (spawn area)`);
+                continue;
+            }
+            
+            const exitDir = creep.room.findExitTo(roomName);
+            if (exitDir !== ERR_NO_PATH && exitDir !== ERR_INVALID_ARGS) {
+                reachableRooms.push(roomName);
+            } else {
+                // Mark unreachable rooms as "scouted" so we don't try again
+                scoutedRooms.push(roomName);
+                creep.memory.scoutedRooms = scoutedRooms;
+                console.log(`🚫 Scout ${creep.name} skipping permanently unreachable room ${roomName}`);
+            }
+        }
+        
+        if (reachableRooms.length > 0) {
+            // Assign first reachable unscouted room
+            creep.memory.targetRoom = reachableRooms[0];
+            console.log(`🔍 Scout ${creep.name} assigned to explore ${reachableRooms[0]} (${reachableRooms.length} reachable rooms remaining)`);
+        } else {
+            // All rooms scouted, scout can be recycled
+            const spawn = creep.room.find(FIND_MY_SPAWNS)[0];
+            if (spawn && creep.pos.isNearTo(spawn)) {
+                spawn.recycleCreep(creep);
+                console.log(`♻️ Scout ${creep.name} recycled - all rooms explored`);
+            } else if (spawn) {
+                creep.moveTo(spawn, { visualizePathStyle: { stroke: '#ffffff' } });
+            }
+            return;
+        }
+    }
+    
+    // Move to target room
+    if (creep.room.name !== creep.memory.targetRoom) {
+        // Track how long we've been trying to reach this room
+        if (!creep.memory.targetStartTime) {
+            creep.memory.targetStartTime = Game.time;
+        }
+        
+        // If we've been trying for more than 100 ticks, this room is probably blocked
+        if (Game.time - creep.memory.targetStartTime > 100) {
+            console.log(`🚫 Scout ${creep.name} timeout trying to reach ${creep.memory.targetRoom} - marking as temporarily blocked`);
+            
+            // Mark room as temporarily blocked
+            const blockedRooms = creep.memory.blockedRooms || {};
+            blockedRooms[creep.memory.targetRoom] = Game.time;
+            creep.memory.blockedRooms = blockedRooms;
+            
+            // Clear target and try again
+            delete creep.memory.targetRoom;
+            delete creep.memory.targetStartTime;
+            return;
+        }
+        
+        const exitDir = creep.room.findExitTo(creep.memory.targetRoom);
+        if (exitDir === ERR_NO_PATH) {
+            console.log(`⚠️ Scout ${creep.name} can't find path to ${creep.memory.targetRoom}, marking as temporarily blocked`);
+            
+            // Mark room as temporarily blocked
+            const blockedRooms = creep.memory.blockedRooms || {};
+            blockedRooms[creep.memory.targetRoom] = Game.time;
+            creep.memory.blockedRooms = blockedRooms;
+            
+            delete creep.memory.targetRoom;
+            delete creep.memory.targetStartTime;
+            return;
+        }
+        
+        const exit = creep.pos.findClosestByPath(exitDir);
+        if (exit) {
+            creep.moveTo(exit, { 
+                visualizePathStyle: { stroke: '#00ff00' },
+                maxRooms: 2 // Limit to 2 rooms to avoid getting stuck
+            });
+        }
+        return;
+    }
+    
+    // In target room - explore for a few ticks, then mark as scouted
+    if (!creep.memory.scoutTime) {
+        creep.memory.scoutTime = Game.time;
+        console.log(`🔍 Scout ${creep.name} exploring ${creep.room.name}`);
+    }
+    
+    // Scout for 50 ticks (enough to get good vision and evaluate the room)
+    if (Game.time - creep.memory.scoutTime >= 50) {
+        // Mark room as scouted
+        if (!scoutedRooms.includes(creep.room.name)) {
+            scoutedRooms.push(creep.room.name);
+            creep.memory.scoutedRooms = scoutedRooms;
+        }
+        
+        // Clear target and let the scout get a new assignment
+        delete creep.memory.targetRoom;
+        delete creep.memory.scoutTime;
+        delete creep.memory.targetStartTime;
+        
+        console.log(`✅ Scout ${creep.name} completed exploration of ${creep.room.name}`);
+    } else {
+        // Move around the room to explore
+        const randomPos = {
+            x: Math.floor(Math.random() * 50),
+            y: Math.floor(Math.random() * 50)
+        };
+        creep.moveTo(randomPos, { 
+            visualizePathStyle: { stroke: '#00ff00', opacity: 0.5 },
+            range: 25 // Don't need to get exactly to the position
+        });
+    }
+}
+
+// Dedicated remote hauler logic - optimized for remote room operations
+function runRemoteHauler(creep) {
+    const targetRemoteRoom = creep.memory.targetRemoteRoom;
+    const homeRoom = creep.memory.homeRoom;
+    
+    // If carrying energy, deliver to home room
+    if (creep.store[RESOURCE_ENERGY] > 0) {
+        // Check if we're in the home room
+        if (creep.room.name === homeRoom) {
+            // Find delivery targets in home room
+            const spawnTargets = creep.room.find(FIND_STRUCTURES, {
+                filter: (structure) => {
+                    if (structure.structureType === STRUCTURE_EXTENSION || structure.structureType === STRUCTURE_SPAWN) {
+                        return structure.store.getFreeCapacity(RESOURCE_ENERGY) > 0;
+                    }
+                    return false;
+                }
+            });
+            
+            const storage = creep.room.find(FIND_STRUCTURES, {
+                filter: (structure) => {
+                    return structure.structureType === STRUCTURE_STORAGE &&
+                           structure.store.getFreeCapacity(RESOURCE_ENERGY) > 0;
+                }
+            });
+            
+            // Find controller container specifically
+            const controller = creep.room.controller;
+            const sources = creep.room.find(FIND_SOURCES);
+            const controllerContainers = creep.room.find(FIND_STRUCTURES, {
+                filter: (structure) => {
+                    if (structure.structureType !== STRUCTURE_CONTAINER || structure.store.getFreeCapacity(RESOURCE_ENERGY) <= 0) {
+                        return false;
+                    }
+                    if (controller && structure.pos.getRangeTo(controller) <= 3) {
+                        // Make sure it's not a source container
+                        for (const source of sources) {
+                            if (structure.pos.getRangeTo(source) <= 2) {
+                                return false;
+                            }
+                        }
+                        return true;
+                    }
+                    return false;
+                }
+            });
+            
+            let target = null;
+            
+            // Priority: Spawn/Extensions > Controller containers > Storage
+            if (spawnTargets.length > 0) {
+                target = creep.pos.findClosestByPath(spawnTargets);
+            } else if (controllerContainers.length > 0) {
+                target = creep.pos.findClosestByPath(controllerContainers);
+            } else if (storage.length > 0) {
+                target = creep.pos.findClosestByPath(storage);
+            }
+            
+            if (target) {
+                if (creep.transfer(target, RESOURCE_ENERGY) === ERR_NOT_IN_RANGE) {
+                    creep.moveTo(target, { visualizePathStyle: { stroke: '#ffffff' } });
+                }
+            }
+        } else {
+            // Not in home room - move towards home room
+            const exitDir = creep.room.findExitTo(homeRoom);
+            const exit = creep.pos.findClosestByPath(exitDir);
+            if (exit) {
+                creep.moveTo(exit, { visualizePathStyle: { stroke: '#ffffff' } });
+            }
+        }
+    } else {
+        // Need energy - go to target remote room and collect
+        if (creep.room.name === targetRemoteRoom) {
+            // In target remote room - collect energy
+            const sources = creep.room.find(FIND_SOURCES);
+            
+            // Look for source containers first
+            const sourceContainers = creep.room.find(FIND_STRUCTURES, {
+                filter: (structure) => {
+                    if (structure.structureType !== STRUCTURE_CONTAINER || structure.store[RESOURCE_ENERGY] <= 0) {
+                        return false;
+                    }
+                    // Only pick up from source containers
+                    for (const source of sources) {
+                        if (structure.pos.getRangeTo(source) <= 2) {
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+            });
+            
+            // Look for dropped energy near sources
+            const droppedEnergy = creep.room.find(FIND_DROPPED_RESOURCES, {
+                filter: (resource) => {
+                    if (resource.resourceType !== RESOURCE_ENERGY || resource.amount < 200) {
+                        return false;
+                    }
+                    // Only near sources
+                    for (const source of sources) {
+                        if (resource.pos.getRangeTo(source) <= 3) {
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+            });
+            
+            let target = null;
+            
+            // Prefer containers over dropped energy
+            if (sourceContainers.length > 0) {
+                target = creep.pos.findClosestByPath(sourceContainers);
+                if (target) {
+                    if (creep.withdraw(target, RESOURCE_ENERGY) === ERR_NOT_IN_RANGE) {
+                        creep.moveTo(target, { visualizePathStyle: { stroke: '#ffaa00' } });
+                    }
+                }
+            } else if (droppedEnergy.length > 0) {
+                target = creep.pos.findClosestByPath(droppedEnergy);
+                if (target) {
+                    if (creep.pickup(target) === ERR_NOT_IN_RANGE) {
+                        creep.moveTo(target, { visualizePathStyle: { stroke: '#ffaa00' } });
+                    }
+                }
+            }
+        } else {
+            // Not in target remote room - move towards it
+            const exitDir = creep.room.findExitTo(targetRemoteRoom);
+            const exit = creep.pos.findClosestByPath(exitDir);
+            if (exit) {
+                creep.moveTo(exit, { visualizePathStyle: { stroke: '#00aa00' } });
             }
         }
     }
@@ -3642,12 +4137,20 @@ function evaluateRemoteRoom(roomName, homeRoomName) {
     // Swamp penalty (prefer plains) - reduce score by up to 50 based on swamp %
     score -= swampPercent * 50;
     
+    // Determine reason based on score
+    let reason = 'Suitable';
+    if (score <= 0) {
+        reason = 'Poor score (distance/swamp penalty too high)';
+    } else if (score < 50) {
+        reason = 'Low score (marginal room)';
+    }
+    
     return {
         score: Math.round(score),
         sources: sources.length,
         avgDistance: Math.round(avgDistance),
         swampPercent: Math.round(swampPercent * 100),
-        reason: 'Suitable'
+        reason: reason
     };
 }
 
@@ -3670,13 +4173,66 @@ function scoutAdjacentRooms(homeRoom) {
     // Get adjacent room names
     const adjacentRooms = getAdjacentRoomNames(homeRoom.name);
     
-    console.log(`🔍 Scouting ${adjacentRooms.length} adjacent rooms for remote harvesting...`);
+    // Filter out unreachable rooms in respawn areas
+    const reachableAdjacentRooms = [];
+    const homeSpawn = homeRoom.find(FIND_MY_SPAWNS)[0];
     
-    // Evaluate each adjacent room we have vision of
+    for (const roomName of adjacentRooms) {
+        const exitDir = homeRoom.findExitTo(roomName);
+        if (exitDir !== ERR_NO_PATH && exitDir !== ERR_INVALID_ARGS) {
+            reachableAdjacentRooms.push(roomName);
+        }
+    }
+    
+    console.log(`🔍 Scouting ${reachableAdjacentRooms.length} reachable adjacent rooms for remote harvesting (${adjacentRooms.length - reachableAdjacentRooms.length} blocked by respawn area boundaries)...`);
+    
+    // Check if we have any scouts that have completed scouting
+    const scouts = _.filter(Game.creeps, c => c.memory.role === 'scout');
+    let newlyScoutedRooms = [];
+    
+    for (const scout of scouts) {
+        if (scout.memory.scoutedRooms) {
+            for (const scoutedRoom of scout.memory.scoutedRooms) {
+                if (!Memory.remote.rooms[scoutedRoom]) {
+                    newlyScoutedRooms.push(scoutedRoom);
+                }
+            }
+        }
+    }
+    
+    // Evaluate newly scouted rooms
     let evaluated = 0;
     let suitable = 0;
     
-    for (const roomName of adjacentRooms) {
+    for (const roomName of newlyScoutedRooms) {
+        const evaluation = evaluateRemoteRoom(roomName, homeRoom.name);
+        
+        if (evaluation !== null) {
+            evaluated++;
+            
+            // Store evaluation in memory
+            Memory.remote.rooms[roomName] = {
+                evaluated: true,
+                lastCheck: Game.time,
+                score: evaluation.score,
+                sources: evaluation.sources || 0,
+                distance: evaluation.avgDistance || 999,
+                swampPercent: evaluation.swampPercent || 0,
+                active: false,
+                reason: evaluation.reason
+            };
+            
+            if (evaluation.score > 0) {
+                suitable++;
+                console.log(`  ✅ ${roomName}: Score ${evaluation.score} (${evaluation.sources} sources, ${evaluation.avgDistance} tiles, ${evaluation.swampPercent}% swamp)`);
+    } else {
+                console.log(`  ❌ ${roomName}: ${evaluation.reason}`);
+            }
+        }
+    }
+    
+    // Also evaluate any reachable rooms we have vision of but haven't tracked yet
+    for (const roomName of reachableAdjacentRooms) {
         // Skip if already tracked
         if (Memory.remote.rooms[roomName]) continue;
         
@@ -3704,7 +4260,7 @@ function scoutAdjacentRooms(homeRoom) {
                 console.log(`  ❌ ${roomName}: ${evaluation.reason}`);
             }
         } else {
-            // No vision - add to scout queue
+            // No vision - add to scout queue (only if reachable)
             if (!Memory.remote.scoutQueue.includes(roomName)) {
                 Memory.remote.scoutQueue.push(roomName);
             }
@@ -3713,6 +4269,13 @@ function scoutAdjacentRooms(homeRoom) {
     
     if (evaluated > 0) {
         console.log(`📊 Evaluated ${evaluated} rooms, ${suitable} suitable for remote harvesting`);
+    } else if (newlyScoutedRooms.length === 0) {
+        const scouts = _.filter(Game.creeps, c => c.memory.role === 'scout');
+        if (scouts.length === 0) {
+            console.log(`⚠️ No scouts available - spawning scout to explore adjacent rooms`);
+    } else {
+            console.log(`🔍 Scout active - exploring adjacent rooms for remote harvesting`);
+        }
     }
     
     // Auto-select best remote rooms based on RCL
@@ -3848,8 +4411,8 @@ function planRemoteRoomInfrastructure(remoteRoomName, homeRoomName) {
         
         const existingSite = source.pos.findInRange(FIND_CONSTRUCTION_SITES, 1, {
             filter: s => s.structureType === STRUCTURE_CONTAINER
-        })[0];
-        
+            })[0];
+            
         if (!existingContainer && !existingSite) {
             // Find best position for container (adjacent to source)
             const terrain = new Room.Terrain(remoteRoomName);
@@ -4058,14 +4621,66 @@ function runRemoteBuilder(creep) {
     }
     
     if (!creep.memory.working) {
-        // Need energy - get from home room
-        if (creep.room.name !== creep.memory.homeRoom) {
-            const exitDir = creep.room.findExitTo(creep.memory.homeRoom);
-            const exit = creep.pos.findClosestByPath(exitDir);
-            if (exit) {
-                creep.moveTo(exit, { visualizePathStyle: { stroke: '#ffffff' } });
+        // Need energy - prioritize remote room sources, then home room
+        if (creep.room.name === targetRoomName) {
+            // In remote room - check for energy here first
+            const sources = creep.room.find(FIND_SOURCES);
+            
+            // Check for containers with energy near sources
+            const sourceContainers = creep.room.find(FIND_STRUCTURES, {
+                filter: (structure) => {
+                    if (structure.structureType !== STRUCTURE_CONTAINER || structure.store[RESOURCE_ENERGY] < 50) {
+                        return false;
+                    }
+                    for (const source of sources) {
+                        if (structure.pos.getRangeTo(source) <= 2) {
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+            });
+            
+            // Check for dropped energy near sources
+            const droppedEnergy = creep.room.find(FIND_DROPPED_RESOURCES, {
+                filter: (resource) => {
+                    if (resource.resourceType !== RESOURCE_ENERGY || resource.amount < 50) {
+                        return false;
+                    }
+                    for (const source of sources) {
+                        if (resource.pos.getRangeTo(source) <= 3) {
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+            });
+            
+            if (sourceContainers.length > 0) {
+                // Get energy from container
+                const target = creep.pos.findClosestByPath(sourceContainers);
+                if (target) {
+                    if (creep.withdraw(target, RESOURCE_ENERGY) === ERR_NOT_IN_RANGE) {
+                        creep.moveTo(target, { visualizePathStyle: { stroke: '#ffffff' } });
+                    }
+                }
+            } else if (droppedEnergy.length > 0) {
+                // Pick up dropped energy
+                const target = creep.pos.findClosestByPath(droppedEnergy);
+                if (target) {
+                    if (creep.pickup(target) === ERR_NOT_IN_RANGE) {
+                        creep.moveTo(target, { visualizePathStyle: { stroke: '#ffffff' } });
+                    }
+                }
+            } else {
+                // No energy in remote room - go back to home room
+                const exitDir = creep.room.findExitTo(creep.memory.homeRoom);
+                const exit = creep.pos.findClosestByPath(exitDir);
+                if (exit) {
+                    creep.moveTo(exit, { visualizePathStyle: { stroke: '#ffffff' } });
+                }
             }
-        } else {
+        } else if (creep.room.name === creep.memory.homeRoom) {
             // In home room - get energy from storage or containers
             const storage = creep.room.storage;
             if (storage && storage.store[RESOURCE_ENERGY] > 0) {
@@ -4083,6 +4698,13 @@ function runRemoteBuilder(creep) {
                         creep.moveTo(target, { visualizePathStyle: { stroke: '#ffffff' } });
                     }
                 }
+            }
+        } else {
+            // In transit - move towards home room
+            const exitDir = creep.room.findExitTo(creep.memory.homeRoom);
+            const exit = creep.pos.findClosestByPath(exitDir);
+            if (exit) {
+                creep.moveTo(exit, { visualizePathStyle: { stroke: '#ffffff' } });
             }
         }
     } else {
@@ -4123,12 +4745,15 @@ function runRemoteBuilder(creep) {
                         }
                     }
                 } else {
-                    // Nothing to do - go back to home room
-                    if (creep.room.name !== creep.memory.homeRoom) {
-                        const exitDir = creep.room.findExitTo(creep.memory.homeRoom);
-                        const exit = creep.pos.findClosestByPath(exitDir);
-                        if (exit) {
-                            creep.moveTo(exit, { visualizePathStyle: { stroke: '#ffffff' } });
+                    // Nothing to do - park near a source and wait
+                    const sources = creep.room.find(FIND_SOURCES);
+                    if (sources.length > 0) {
+                        const closestSource = creep.pos.findClosestByPath(sources);
+                        if (closestSource && creep.pos.getRangeTo(closestSource) > 2) {
+                            creep.moveTo(closestSource, { 
+                                visualizePathStyle: { stroke: '#ffffff', opacity: 0.5 },
+                                range: 2
+                            });
                         }
                     }
                 }
