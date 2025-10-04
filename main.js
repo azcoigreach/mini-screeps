@@ -199,6 +199,56 @@ function updateRemoteRoomInfo(roomName) {
     }
 }
 
+/**
+ * Remote miner behavior - mines energy in remote rooms
+ */
+function runRemoteMiner(creep) {
+    const sourceId = creep.memory.sourceId;
+    const targetRoomName = creep.memory.targetRoom;
+    
+    if (!sourceId || !targetRoomName) {
+        console.log(`⚠️ Remote miner ${creep.name} missing sourceId or targetRoom!`);
+        return;
+    }
+    
+    // Move to target room if not there
+    if (creep.room.name !== targetRoomName) {
+        const exitDir = creep.room.findExitTo(targetRoomName);
+        const exit = creep.pos.findClosestByPath(exitDir);
+        if (exit) {
+            creep.moveTo(exit, { visualizePathStyle: { stroke: '#ffaa00' } });
+        }
+        return;
+    }
+    
+    // We're in the target room - mine the source
+    const source = Game.getObjectById(sourceId);
+    if (!source) {
+        console.log(`⚠️ Remote miner ${creep.name} can't find source ${sourceId}!`);
+        return;
+    }
+    
+    // Check if there's a container at the source
+    const containers = source.pos.findInRange(FIND_STRUCTURES, 1, {
+        filter: s => s.structureType === STRUCTURE_CONTAINER
+    });
+    
+    if (containers.length > 0) {
+        const container = containers[0];
+        // Move to container and mine
+        if (!creep.pos.isEqualTo(container.pos)) {
+            creep.moveTo(container.pos, { visualizePathStyle: { stroke: '#ffaa00' } });
+        } else {
+            creep.harvest(source);
+        }
+    } else {
+        // No container yet - mine next to source
+        if (creep.harvest(source) === ERR_NOT_IN_RANGE) {
+            creep.moveTo(source, { visualizePathStyle: { stroke: '#ffaa00' } });
+        }
+    }
+}
+
 module.exports.loop = function () {
     // Clean up memory
     for (const name in Memory.creeps) {
