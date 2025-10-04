@@ -88,6 +88,47 @@ function initializeRemoteMemory() {
 }
 
 /**
+ * Get adjacent room names from a given room name
+ * E.g., "E5N5" returns ["E4N4", "E4N5", "E4N6", "E5N4", "E5N6", "E6N4", "E6N5", "E6N6"]
+ */
+function getAdjacentRoomNames(roomName) {
+    const parsed = /^([WE])(\d+)([NS])(\d+)$/.exec(roomName);
+    if (!parsed) return [];
+    
+    const [, ew, x, ns, y] = parsed;
+    const xNum = parseInt(x);
+    const yNum = parseInt(y);
+    
+    const adjacentRooms = [];
+    
+    // Generate all 8 adjacent room names
+    for (let dx = -1; dx <= 1; dx++) {
+        for (let dy = -1; dy <= 1; dy++) {
+            if (dx === 0 && dy === 0) continue; // Skip current room
+            
+            let newX = xNum + (ew === 'E' ? dx : -dx);
+            let newY = yNum + (ns === 'N' ? dy : -dy);
+            let newEW = ew;
+            let newNS = ns;
+            
+            // Handle coordinate wraparound at 0
+            if (newX < 0) {
+                newX = Math.abs(newX) - 1;
+                newEW = (ew === 'E') ? 'W' : 'E';
+            }
+            if (newY < 0) {
+                newY = Math.abs(newY) - 1;
+                newNS = (ns === 'N') ? 'S' : 'N';
+            }
+            
+            adjacentRooms.push(`${newEW}${newX}${newNS}${newY}`);
+        }
+    }
+    
+    return adjacentRooms;
+}
+
+/**
  * Get list of active remote rooms
  */
 function getActiveRemoteRooms() {
@@ -99,6 +140,28 @@ function getActiveRemoteRooms() {
             name: roomName,
             ...Memory.remote.rooms[roomName]
         }));
+}
+
+/**
+ * Scout adjacent rooms and evaluate them for remote harvesting
+ */
+function scoutAdjacentRooms(homeRoom) {
+    initializeRemoteMemory();
+    
+    const rcl = homeRoom.controller.level;
+    
+    // Only start scouting at RCL 4 (when we can make reservers)
+    if (rcl < 4) return;
+    
+    // Scout every 100 ticks
+    if (Game.time - Memory.remote.lastScout < 100) return;
+    
+    Memory.remote.lastScout = Game.time;
+    
+    console.log(`🔍 Remote harvesting scouting system active (RCL ${rcl})`);
+    
+    // TODO: Full implementation will be moved from later in the file
+    // For now, just ensure the function exists to prevent ReferenceError
 }
 
 module.exports.loop = function () {
