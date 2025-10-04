@@ -2971,7 +2971,7 @@ function runHauler(creep) {
                     if (target) {
                         if (creep.pickup(target) === ERR_NOT_IN_RANGE) {
                             creep.moveTo(target, { visualizePathStyle: { stroke: '#ffaa00' } });
-                        } else {
+            } else {
                             delete creep.memory.targetRemoteContainer;
                         }
                     }
@@ -4224,7 +4224,7 @@ function scoutAdjacentRooms(homeRoom) {
             if (evaluation.score > 0) {
                 suitable++;
                 console.log(`  ✅ ${roomName}: Score ${evaluation.score} (${evaluation.sources} sources, ${evaluation.avgDistance} tiles, ${evaluation.swampPercent}% swamp)`);
-            } else {
+    } else {
                 console.log(`  ❌ ${roomName}: ${evaluation.reason}`);
             }
         }
@@ -4883,6 +4883,6 @@ function manageCPUForPixels() {
         if (Game.time % 100 === 0) {
             console.log(`CPU: ${cpuUsed.toFixed(2)}/${cpuLimit}, Bucket: ${cpuBucket} (Local Server - No Pixel Generation)`);
         }
+        }
     }
-}
 }
