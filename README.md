@@ -3,7 +3,7 @@
 
 A minimal, self-contained Screeps bot focused on **Pixel earning** with advanced throughput optimization for maximum room efficiency. This bot operates autonomously with **remote harvesting** support (v1.2), implementing mathematical throughput calculations for optimal energy flow across multiple rooms.
 
-**Version**: 1.2.0 | **File**: `main.js` (~4000 lines) | **Dependencies**: None
+**Version**: 1.2.1 | **File**: `main.js` (~4900 lines) | **Dependencies**: None
 
 ## 🎯 **Primary Goals**
 
@@ -414,18 +414,25 @@ The bot automatically scouts, evaluates, and harvests energy from adjacent rooms
   - Distance from home room
   - Absence of hostile structures
   - Terrain quality (plains preferred over swamps)
+  - **Spawn Area Detection**: Automatically detects and skips rooms blocked by spawn area boundaries
+  - **Timeout Handling**: Marks unreachable rooms as temporarily blocked (100 tick timeout)
+  - **Retry Logic**: Blocked rooms can be retried after 1000 ticks when spawn areas expire
 - **Smart Room Selection**: Activates best rooms based on RCL:
   - RCL 4-5: 1 remote room
   - RCL 6-7: 2 remote rooms
   - RCL 8: 3 remote rooms
 - **New Creep Roles**:
   - **Scout**: Explores adjacent rooms to discover remote harvesting opportunities
-  - **Reserver**: Keeps remote controllers reserved (2 CLAIM parts)
+  - **Reserver**: Keeps remote controllers reserved (2 CLAIM parts), smart spawning based on reservation status
   - **Remote Miner**: Harvests energy in remote rooms (5 WORK parts, parks on containers)
   - **Remote Builder**: Builds and maintains containers/roads in remote rooms
-  - **Remote Hauler**: Dedicated energy transport for high-value remote rooms
+  - **Remote Hauler**: Dedicated energy transport for high-value remote rooms (2+ sources)
 - **Infrastructure Planning**: Automatically plans containers at sources and roads back to home
-- **Energy Flow Integration**: Haulers automatically collect from remote rooms when local sources are depleted
+- **Smart Energy Flow**: 
+  - Haulers wait for containers to reach 400+ energy before collecting (efficient trips)
+  - Prioritizes controller containers over storage to keep upgraders supplied
+  - Remote energy collected when local containers are low
+  - Regular haulers return to home room before delivering energy
 - **Throughput Calculations**: Spawns additional haulers based on remote source count and distance
 
 ### **Energy Boost**
@@ -440,6 +447,32 @@ The bot automatically scouts, evaluates, and harvests energy from adjacent rooms
 - Worth the investment for 3x energy income
 
 ## 📝 **Version History**
+
+### **v1.2.1** (October 4, 2025) - Hauler Efficiency & Scout Improvements
+- **Hauler Efficiency Improvements**:
+  - Increased container energy thresholds from 100 to 400 energy for collection
+  - Haulers now wait for containers to build up meaningful amounts before collecting
+  - Remote dropped energy threshold increased from 50/100 to 200 energy
+  - Better utilization of remote room energy sources
+  - Reduced number of hauler trips with fuller cargo loads
+- **Energy Delivery Priority Updates**:
+  - Controller containers now prioritized over storage (keeps upgraders supplied)
+  - Delivery order: Spawn/Extensions/Towers → Controller Containers → Storage → Other Containers
+  - Prevents upgraders from running out of energy when storage is present
+- **Scout Spawn Area Handling**:
+  - Added timeout detection for scouts stuck trying to reach blocked rooms (100 tick timeout)
+  - Temporarily blocked rooms tracked in memory and retried after 1000 ticks
+  - Better handling of spawn area boundaries in respawn zones
+  - Scouts now efficiently skip unreachable rooms and focus on accessible ones
+- **Reserver Spawning Optimization**:
+  - Only spawns new reserver when reservation < 1000 ticks remaining
+  - Checks actual room reservation status before spawning
+  - Reduces unnecessary reserver spawning and energy waste
+- **Bug Fixes**:
+  - Fixed haulers sitting in remote rooms with full cargo (now return home to deliver)
+  - Fixed optional chaining syntax errors (not supported by Screeps server)
+  - Fixed syntax error in file header comment block
+  - Fixed indentation issues in creep role tracking
 
 ### **v1.2.0** (October 4, 2025) - Remote Harvesting & Multi-Spawn
 - **Remote Harvesting System**: Automatic scouting, evaluation, and harvesting of adjacent rooms

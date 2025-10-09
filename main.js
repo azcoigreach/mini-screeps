@@ -2070,6 +2070,7 @@ function createMissingConstructionSites(room) {
                 STRUCTURE_SPAWN,
                 STRUCTURE_TOWER,
                 STRUCTURE_CONTAINER,
+                STRUCTURE_RAMPART,     // Ramparts for defense
                 STRUCTURE_WALL,
                 STRUCTURE_ROAD,
                 STRUCTURE_LINK,
@@ -2083,6 +2084,7 @@ function createMissingConstructionSites(room) {
             STRUCTURE_STORAGE,
             STRUCTURE_TOWER,
             STRUCTURE_CONTAINER,
+            STRUCTURE_RAMPART,     // Ramparts for defense
             STRUCTURE_WALL,
             STRUCTURE_ROAD,
             STRUCTURE_LINK,
@@ -2366,6 +2368,8 @@ function visualizeBasePlan(room) {
     // Visualize planned structures
     // 1. Base planning visualization (planned structures)
     room.memory.plannedStructures.forEach(planned => {
+        if (!planned || !planned.type || !planned.x || !planned.y) return; // Skip invalid entries
+        
         const color = structureColors[planned.type] || '#fff';
         const pos = new RoomPosition(planned.x, planned.y, room.name);
         visual.circle(pos.x, pos.y, {radius:0.45,fill:color,opacity:0.35,stroke:color});
@@ -2999,19 +3003,25 @@ function runScout(creep) {
     // If no target room assigned, get one from the scout queue
     if (!targetRoom) {
         const adjacentRooms = getAdjacentRoomNames(homeRoom);
-        const unscoutedRooms = adjacentRooms.filter(roomName => !scoutedRooms.includes(roomName));
-        
-        // Filter out unreachable rooms and temporarily blocked rooms
-        const reachableRooms = [];
         const blockedRooms = creep.memory.blockedRooms || {};
         
-        for (const roomName of unscoutedRooms) {
-            // Check if this room was recently blocked (within last 1000 ticks)
+        // Filter out scouted rooms AND temporarily blocked rooms
+        const unscoutedRooms = adjacentRooms.filter(roomName => {
+            // Skip if already scouted
+            if (scoutedRooms.includes(roomName)) return false;
+            
+            // Skip if temporarily blocked (within last 1000 ticks)
             if (blockedRooms[roomName] && (Game.time - blockedRooms[roomName]) < 1000) {
-                console.log(`🚫 Scout ${creep.name} skipping temporarily blocked room ${roomName} (spawn area)`);
-                continue;
+                return false;
             }
             
+            return true;
+        });
+        
+        // Filter out unreachable rooms
+        const reachableRooms = [];
+        
+        for (const roomName of unscoutedRooms) {
             const exitDir = creep.room.findExitTo(roomName);
             if (exitDir !== ERR_NO_PATH && exitDir !== ERR_INVALID_ARGS) {
                 reachableRooms.push(roomName);
@@ -3028,11 +3038,11 @@ function runScout(creep) {
             creep.memory.targetRoom = reachableRooms[0];
             console.log(`🔍 Scout ${creep.name} assigned to explore ${reachableRooms[0]} (${reachableRooms.length} reachable rooms remaining)`);
         } else {
-            // All rooms scouted, scout can be recycled
+            // All rooms scouted or blocked, scout can be recycled
             const spawn = creep.room.find(FIND_MY_SPAWNS)[0];
             if (spawn && creep.pos.isNearTo(spawn)) {
                 spawn.recycleCreep(creep);
-                console.log(`♻️ Scout ${creep.name} recycled - all rooms explored`);
+                console.log(`♻️ Scout ${creep.name} recycled - all accessible rooms explored (${Object.keys(blockedRooms).length} temporarily blocked)`);
             } else if (spawn) {
                 creep.moveTo(spawn, { visualizePathStyle: { stroke: '#ffffff' } });
             }
