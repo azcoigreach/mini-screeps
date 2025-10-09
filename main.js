@@ -39,7 +39,9 @@ const VISUALIZE_BASE = true; // Set to false to disable base plan visualization
 
 // Version 1.3: Tactical & Aggression Settings
 const VERSION = '1.3';
-const MIN_BUCKET_RECOVERY_RATE = 150; // Minimum bucket recovery per tick to maintain efficiency
+const TARGET_BUCKET_RECOVERY_RATE = 150; // Target bucket recovery rate (optimal)
+const MIN_BUCKET_RECOVERY_RATE = 50; // Minimum acceptable recovery rate (slow but positive)
+const CRITICAL_RECOVERY_RATE = 0; // Below this is CRITICAL - negative or zero recovery!
 const MAX_CONTROLLED_ROOMS = 3; // Maximum rooms to control at once (home + conquered)
 const SPEEDRUN_TARGET_RCL = 5; // Target RCL for speed running
 const AGGRESSIVE_SCOUT_RANGE = 3; // How many rooms away to scout aggressively
@@ -50,8 +52,9 @@ const ROOM_ABANDON_CHECK_INTERVAL = 5000; // Check every 5000 ticks if we should
 const ENABLE_MILITARY = true; // Master switch for military operations
 const MIN_RCL_FOR_MILITARY = 4; // Minimum RCL before launching military operations
 const ASSAULT_WAVE_SIZE = 3; // Number of military creeps per assault wave
-const CRITICAL_BUCKET_THRESHOLD = 1000; // Only stop military when bucket is critically low
-const BUCKET_RECOVERY_FLOOR = 100; // Warn if recovery drops below this, but don't stop military
+// NOTE: This is a PIXEL-GENERATING bot! Bucket will drain to 0 regularly.
+// We ONLY care about bucket RECOVERY RATE staying positive (50+ bucket/tick)
+// Absolute bucket level is IGNORED - only recovery rate matters!
 
 // Room Evaluation Thresholds
 const MIN_SOURCES_FOR_CONQUEST = 1; // Minimum sources to consider a room worth conquering
@@ -1878,9 +1881,10 @@ function spawnCreeps(spawn, creeps, sources, emergency) {
                 // Spawn military creeps for this assault
                 const cpuEfficiency = getCPUEfficiency();
                 
-                if (!cpuEfficiency.canAffordMilitary) {
+                // Only gate on recovery RATE, not bucket level!
+                if (!cpuEfficiency.canAffordMilitary || cpuEfficiency.isCritical) {
                     if (Game.time % 20 === 0) {
-                        console.log(`🚨 CRITICAL: Bucket at ${cpuEfficiency.bucket} - pausing military spawns`);
+                        console.log(`⚠️ CPU: Recovery ${cpuEfficiency.averageRecovery.toFixed(1)}/tick too slow - pausing military spawns`);
                     }
                     continue;
                 }
@@ -2536,24 +2540,25 @@ function displayStatusDashboard(room, creeps) {
         
         console.log(`\n--- v1.3 TACTICAL STATUS ---`);
         
-        // CPU efficiency
-        const bucketRecovery = cpuStats.averageBucketRecovery || 0;
+        // CPU efficiency - ONLY recovery rate matters (bucket level ignored for pixel generation!)
+        const recoveryRate = cpuStats.averageBucketRecovery || 0;
         const bucket = Game.cpu.bucket;
         let statusIcon = '✅';
         let statusMsg = 'OPTIMAL';
         
-        if (bucket < CRITICAL_BUCKET_THRESHOLD) {
+        if (recoveryRate <= CRITICAL_RECOVERY_RATE) {
             statusIcon = '🚨';
-            statusMsg = 'CRITICAL - Military paused';
-        } else if (bucketRecovery < BUCKET_RECOVERY_FLOOR) {
+            statusMsg = 'CRITICAL - Negative recovery!';
+        } else if (recoveryRate < MIN_BUCKET_RECOVERY_RATE) {
             statusIcon = '⚠️';
-            statusMsg = 'LOW recovery';
-        } else if (bucketRecovery < MIN_BUCKET_RECOVERY_RATE) {
+            statusMsg = 'TOO SLOW - Military paused';
+        } else if (recoveryRate < TARGET_BUCKET_RECOVERY_RATE) {
             statusIcon = '⚠️';
             statusMsg = 'Below target';
         }
         
-        console.log(`${statusIcon} CPU: Bucket ${bucket}/10000, Recovery: ${bucketRecovery.toFixed(1)}/tick (${statusMsg})`);
+        // Show bucket level for reference, but it's not used for decisions
+        console.log(`${statusIcon} CPU: Recovery ${recoveryRate.toFixed(1)}/tick (${statusMsg}) | Bucket: ${bucket}`);
         
         // Military population
         if (rcl >= MIN_RCL_FOR_MILITARY) {
@@ -5402,14 +5407,23 @@ function monitorCPUPerformance() {
         const recentSamples = cpuStats.samples.slice(-10); // Last 100 ticks
         cpuStats.averageBucketRecovery = _.sum(recentSamples.map(s => s.recoveryRate)) / recentSamples.length;
         
-        // Alert if below target threshold (but don't stop operations)
-        if (cpuStats.averageBucketRecovery < MIN_BUCKET_RECOVERY_RATE && Game.time % 100 === 0) {
-            console.log(`⚠️ CPU EFFICIENCY: Bucket recovery ${cpuStats.averageBucketRecovery.toFixed(1)}/tick (target: ${MIN_BUCKET_RECOVERY_RATE}+, continuing ops)`);
+        // Alert based on RECOVERY RATE only (ignore bucket level!)
+        if (cpuStats.averageBucketRecovery < TARGET_BUCKET_RECOVERY_RATE && 
+            cpuStats.averageBucketRecovery >= MIN_BUCKET_RECOVERY_RATE && 
+            Game.time % 100 === 0) {
+            console.log(`⚠️ CPU: Recovery ${cpuStats.averageBucketRecovery.toFixed(1)}/tick (target: ${TARGET_BUCKET_RECOVERY_RATE}, acceptable, continuing)`);
         }
         
-        // Critical alert if recovery is very low
-        if (cpuStats.averageBucketRecovery < BUCKET_RECOVERY_FLOOR && Game.time % 50 === 0) {
-            console.log(`🚨 CPU CRITICAL: Recovery at ${cpuStats.averageBucketRecovery.toFixed(1)}/tick (floor: ${BUCKET_RECOVERY_FLOOR})`);
+        // Warn if slow but positive recovery
+        if (cpuStats.averageBucketRecovery > CRITICAL_RECOVERY_RATE && 
+            cpuStats.averageBucketRecovery < MIN_BUCKET_RECOVERY_RATE && 
+            Game.time % 50 === 0) {
+            console.log(`⚠️ CPU SLOW: Recovery ${cpuStats.averageBucketRecovery.toFixed(1)}/tick (min: ${MIN_BUCKET_RECOVERY_RATE}, too slow - scaling back)`);
+        }
+        
+        // Critical alert if recovery is zero or negative
+        if (cpuStats.averageBucketRecovery <= CRITICAL_RECOVERY_RATE && Game.time % 20 === 0) {
+            console.log(`🚨 CPU CRITICAL: Recovery ${cpuStats.averageBucketRecovery.toFixed(1)}/tick (NEGATIVE! Emergency mode)`);
         }
     }
     
@@ -5419,6 +5433,8 @@ function monitorCPUPerformance() {
 
 /**
  * Get current CPU efficiency status
+ * PIXEL-GENERATING BOT: Bucket level is irrelevant! We drain to 0 for pixels.
+ * ONLY bucket recovery RATE matters - must stay positive!
  */
 function getCPUEfficiency() {
     const cpuStats = Memory.strategic.cpuStats;
@@ -5428,11 +5444,15 @@ function getCPUEfficiency() {
     return {
         bucket: bucket,
         averageRecovery: recoveryRate,
-        isEfficient: recoveryRate >= MIN_BUCKET_RECOVERY_RATE,
-        // Only stop military if bucket is critically low (< 1000)
-        canAffordMilitary: bucket >= CRITICAL_BUCKET_THRESHOLD,
-        // Warn if recovery is dropping but don't gate military
-        recoveryWarning: recoveryRate < BUCKET_RECOVERY_FLOOR
+        // Efficient if recovery rate is at target (150+)
+        isEfficient: recoveryRate >= TARGET_BUCKET_RECOVERY_RATE,
+        // Can afford military if recovery rate is positive and acceptable (50+)
+        // We don't care about bucket level at all!
+        canAffordMilitary: recoveryRate >= MIN_BUCKET_RECOVERY_RATE,
+        // Critical if recovery rate is negative or zero
+        isCritical: recoveryRate <= CRITICAL_RECOVERY_RATE,
+        // Slow if recovery rate is positive but below minimum
+        isSlow: recoveryRate > CRITICAL_RECOVERY_RATE && recoveryRate < MIN_BUCKET_RECOVERY_RATE
     };
 }
 
@@ -5626,22 +5646,28 @@ function getRoomsInRange(centerRoom, range) {
 
 /**
  * Plan and initiate military operations
+ * Gates based ONLY on bucket recovery RATE, not absolute bucket level!
  */
 function planMilitaryOperations(homeRoom, creeps) {
     const cpuEfficiency = getCPUEfficiency();
     
-    // Only stop military if bucket is critically low
+    // Only stop if recovery rate is too low (below 50/tick)
     if (!cpuEfficiency.canAffordMilitary) {
         if (Game.time % 50 === 0) {
-            console.log(`🚨 CRITICAL: Bucket at ${cpuEfficiency.bucket} - pausing new military operations`);
+            console.log(`⚠️ CPU: Recovery too slow (${cpuEfficiency.averageRecovery.toFixed(1)}/tick) - pausing new military operations`);
         }
         return;
     }
     
-    // Warn if recovery rate is low but continue operations
-    if (cpuEfficiency.recoveryWarning && Game.time % 100 === 0) {
-        console.log(`⚠️ CPU Recovery at ${cpuEfficiency.averageRecovery.toFixed(1)}/tick (low but continuing military ops)`);
+    // Critical: recovery is negative or zero
+    if (cpuEfficiency.isCritical) {
+        if (Game.time % 20 === 0) {
+            console.log(`🚨 CRITICAL: Recovery at ${cpuEfficiency.averageRecovery.toFixed(1)}/tick (negative!) - emergency mode`);
+        }
+        return;
     }
+    
+    // Note: Bucket level is completely ignored - only recovery rate matters!
     
     // Check cooldown
     const militaryOps = Memory.strategic.militaryOperations;
