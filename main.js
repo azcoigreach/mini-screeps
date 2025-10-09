@@ -1,30 +1,62 @@
 /**
- * Mini-Screeps Bot - Pixel Focused with Throughput Optimization
+ * Mini-Screeps Bot v1.3 - Tactical Aggression & Expansion
  * 
- * Goals:
- * 1. Primary: Earn Pixels (10,000 CPU = 1 Pixel)
- * 2. Secondary: Maintain base and upgrade controller
- * 3. Tertiary: Maximize room energy efficiency through throughput math
+ * Strategic Goals:
+ * 1. PRIMARY: Survive & Dominate - speed run to RCL 5 in home rooms
+ * 2. SECONDARY: Aggressive expansion - scout, conquer, extract resources
+ * 3. TERTIARY: Maintain CPU efficiency for pixel generation (>150 bucket/tick recovery)
  * 
- * Features:
- * - Single room operation only
- * - No expansion or remote harvesting
- * - Optimized creep roles: miner, hauler, upgrader, builder
- * - Centralized base around controller
- * - No Labs or Factories
+ * Version 1.3 Features:
+ * - Tactical room conquest with threat assessment
+ * - Aggressive military scouting and intelligence gathering
+ * - Resource raiding from conquered rooms
+ * - Dynamic room abandonment (keeping only optimal rooms)
+ * - Speed-optimized RCL progression to level 5
+ * - Military creep roles: warriors, healers, dismantlers
+ * - Combat strategy planner with assault wave coordination
+ * - CPU monitoring and efficiency optimization
+ * 
+ * Operational Philosophy:
+ * - Minimal room control (quality > quantity)
+ * - Strike hard and fast after safe mode expires
+ * - Continuously scout for vulnerable targets
+ * - Abandon sub-optimal rooms to maintain efficiency
+ * - Balance aggression with resource sustainability
+ * 
+ * Previous Features (v1.0-1.2):
  * - Throughput-based spawn logic with distance calculations
  * - Road planning for improved hauler efficiency
- * - Dynamic energy allocation between builders and upgraders
- * 
- * Throughput Math Implementation:
- * - 2 sources × 10 energy/tick = 20 energy/tick total
- * - Miners: 5W 1M parked on containers (continuous mining)
- * - Haulers: CARRY/MOVE ratio calculated based on round-trip distance
- * - Energy flow: Sources → Containers → Haulers → Spawn/Extensions → Upgraders
+ * - Remote harvesting capability
+ * - Centralized base layout with defensive structures
  */
 
-// Configuration Constants
+// ========================================
+// CONFIGURATION CONSTANTS
+// ========================================
+
+// Visualization
 const VISUALIZE_BASE = true; // Set to false to disable base plan visualization
+
+// Version 1.3: Tactical & Aggression Settings
+const VERSION = '1.3';
+const MIN_BUCKET_RECOVERY_RATE = 150; // Minimum bucket recovery per tick to maintain efficiency
+const MAX_CONTROLLED_ROOMS = 3; // Maximum rooms to control at once (home + conquered)
+const SPEEDRUN_TARGET_RCL = 5; // Target RCL for speed running
+const AGGRESSIVE_SCOUT_RANGE = 3; // How many rooms away to scout aggressively
+const CONQUEST_COOLDOWN = 1000; // Ticks to wait between conquest attempts
+const ROOM_ABANDON_CHECK_INTERVAL = 5000; // Check every 5000 ticks if we should abandon a room
+
+// Military Settings
+const ENABLE_MILITARY = true; // Master switch for military operations
+const MIN_RCL_FOR_MILITARY = 4; // Minimum RCL before launching military operations
+const ASSAULT_WAVE_SIZE = 3; // Number of military creeps per assault wave
+const CRITICAL_BUCKET_THRESHOLD = 1000; // Only stop military when bucket is critically low
+const BUCKET_RECOVERY_FLOOR = 100; // Warn if recovery drops below this, but don't stop military
+
+// Room Evaluation Thresholds
+const MIN_SOURCES_FOR_CONQUEST = 1; // Minimum sources to consider a room worth conquering
+const MAX_HOSTILE_TOWERS_FOR_ASSAULT = 2; // Won't assault rooms with more towers than this
+const MIN_ENERGY_SCORE_FOR_KEEP = 500; // Minimum energy score to keep a room (source count × distance factor)
 
 // Edge defense configuration
 // Depth (tiles into the room) for the curtain line; overhang tiles each side beyond the entrance span
@@ -90,6 +122,12 @@ module.exports.loop = function () {
         }
     }
 
+    // Version 1.3: Initialize strategic memory
+    initializeStrategicMemory();
+    
+    // Version 1.3: Monitor CPU performance
+    monitorCPUPerformance();
+
     // Get the spawn and room
     const spawn = Game.spawns[Object.keys(Game.spawns)[0]];
     if (!spawn) return;
@@ -127,10 +165,15 @@ module.exports.loop = function () {
         hauler: _.filter(Game.creeps, creep => creep.memory.role === 'hauler'),
         upgrader: _.filter(Game.creeps, creep => creep.memory.role === 'upgrader'),
         builder: _.filter(Game.creeps, creep => creep.memory.role === 'builder'),
-            scout: _.filter(Game.creeps, creep => creep.memory.role === 'scout'),
-            reserver: _.filter(Game.creeps, creep => creep.memory.role === 'reserver'),
+        scout: _.filter(Game.creeps, creep => creep.memory.role === 'scout'),
+        reserver: _.filter(Game.creeps, creep => creep.memory.role === 'reserver'),
         remoteMiner: _.filter(Game.creeps, creep => creep.memory.role === 'remoteMiner'),
-            remoteBuilder: _.filter(Game.creeps, creep => creep.memory.role === 'remoteBuilder')
+        remoteBuilder: _.filter(Game.creeps, creep => creep.memory.role === 'remoteBuilder'),
+        // Version 1.3: Military roles
+        warrior: _.filter(Game.creeps, creep => creep.memory.role === 'warrior'),
+        healer: _.filter(Game.creeps, creep => creep.memory.role === 'healer'),
+        dismantler: _.filter(Game.creeps, creep => creep.memory.role === 'dismantler'),
+        raider: _.filter(Game.creeps, creep => creep.memory.role === 'raider')
     };
 
     // Check for emergency situations
@@ -192,6 +235,31 @@ module.exports.loop = function () {
                 planRemoteRoomInfrastructure(remoteRoom.name, room.name);
             }
         }
+    }
+
+    // Version 1.3: Military Intelligence & Aggression
+    if (Game.time % 10 === 0) {
+        // Aggressive reconnaissance
+        aggressiveReconnaissance(room);
+        
+        // Evaluate and update room intelligence
+        updateRoomIntelligence(room);
+        
+        // Check if we should abandon any sub-optimal rooms
+        if (Game.time % ROOM_ABANDON_CHECK_INTERVAL === 0) {
+            evaluateRoomAbandonment();
+        }
+    }
+    
+    // Version 1.3: Military Operations
+    if (ENABLE_MILITARY && room.controller.level >= MIN_RCL_FOR_MILITARY) {
+        if (Game.time % 50 === 0) {
+            // Plan and execute military operations
+            planMilitaryOperations(room, creeps);
+        }
+        
+        // Coordinate active assault waves
+        coordinateAssaultWaves(room);
     }
 
     // Run creep logic
@@ -1794,6 +1862,103 @@ function spawnCreeps(spawn, creeps, sources, emergency) {
             }
         }
     }
+    
+    // Version 1.3: Military spawning
+    if (ENABLE_MILITARY && rcl >= MIN_RCL_FOR_MILITARY) {
+        const militaryOps = Memory.strategic.militaryOperations;
+        
+        // Check if we have active assaults that need creeps
+        for (const roomName in militaryOps.activeAssaults) {
+            const assault = militaryOps.activeAssaults[roomName];
+            
+            // Skip if still in prepare phase and haven't reached wave size
+            const assignedCreeps = _.filter(Game.creeps, c => c.memory.assaultTarget === roomName);
+            
+            if (assault.phase === 'prepare' && assignedCreeps.length < ASSAULT_WAVE_SIZE) {
+                // Spawn military creeps for this assault
+                const cpuEfficiency = getCPUEfficiency();
+                
+                if (!cpuEfficiency.canAffordMilitary) {
+                    if (Game.time % 20 === 0) {
+                        console.log(`🚨 CRITICAL: Bucket at ${cpuEfficiency.bucket} - pausing military spawns`);
+                    }
+                    continue;
+                }
+                
+                // Count each role assigned to this assault
+                const warriors = _.filter(assignedCreeps, c => c.memory.role === 'warrior');
+                const healers = _.filter(assignedCreeps, c => c.memory.role === 'healer');
+                
+                // Spawn warriors (2 per wave)
+                if (warriors.length < 2 && energyAvailable >= 1300) {
+                    const name = 'warr:' + generateHexId();
+                    const body = [TOUGH, TOUGH, MOVE, MOVE, MOVE, MOVE, ATTACK, ATTACK, ATTACK, ATTACK, MOVE, MOVE];
+                    const cost = body.reduce((sum, part) => sum + BODYPART_COST[part], 0);
+                    
+                    if (energyAvailable >= cost) {
+                        const result = spawn.spawnCreep(body, name, {
+                            memory: {
+                                role: 'warrior',
+                                assaultTarget: roomName,
+                                homeRoom: room.name
+                            }
+                        });
+                        if (result === OK) {
+                            console.log(`⚔️ Spawning warrior for assault on ${roomName} (${cost} energy)`);
+                        }
+                        return;
+                    }
+                }
+                
+                // Spawn healer (1 per wave)
+                if (healers.length < 1 && warriors.length >= 1 && energyAvailable >= 1000) {
+                    const name = 'heal:' + generateHexId();
+                    const body = [MOVE, MOVE, MOVE, MOVE, HEAL, HEAL, HEAL, HEAL];
+                    const cost = body.reduce((sum, part) => sum + BODYPART_COST[part], 0);
+                    
+                    if (energyAvailable >= cost) {
+                        const result = spawn.spawnCreep(body, name, {
+                            memory: {
+                                role: 'healer',
+                                assaultTarget: roomName,
+                                homeRoom: room.name
+                            }
+                        });
+                        if (result === OK) {
+                            console.log(`💚 Spawning healer for assault on ${roomName} (${cost} energy)`);
+                        }
+                        return;
+                    }
+                }
+            }
+            
+            // If assault is in raid phase, spawn raiders
+            if (assault.phase === 'raid') {
+                const raiders = _.filter(assignedCreeps, c => c.memory.role === 'raider');
+                
+                if (raiders.length < 2 && energyAvailable >= 600) {
+                    const name = 'raid:' + generateHexId();
+                    const body = [CARRY, CARRY, CARRY, CARRY, CARRY, CARRY, MOVE, MOVE, MOVE, MOVE, MOVE, MOVE];
+                    const cost = body.reduce((sum, part) => sum + BODYPART_COST[part], 0);
+                    
+                    if (energyAvailable >= cost) {
+                        const result = spawn.spawnCreep(body, name, {
+                            memory: {
+                                role: 'raider',
+                                assaultTarget: roomName,
+                                homeRoom: room.name,
+                                collecting: true
+                            }
+                        });
+                        if (result === OK) {
+                            console.log(`💰 Spawning raider for ${roomName} (${cost} energy)`);
+                        }
+                        return;
+                    }
+                }
+            }
+        }
+    }
 }
 
 // Automated population control based on throughput calculations
@@ -1907,6 +2072,28 @@ function getPopulationByRCL(rcl) {
     // Scale builders with construction workload: 1 base, +1 per >5 sites, up to 3
     const constructionSitesCount = room.find(FIND_CONSTRUCTION_SITES).length;
     buildersNeeded = 1 + Math.min(2, Math.floor(constructionSitesCount / 5));
+    
+    // Version 1.3: RCL 5 Speed Run Optimization
+    // Boost upgraders when below target RCL for aggressive progression
+    if (rcl < SPEEDRUN_TARGET_RCL) {
+        // Calculate how much energy we can throw at the controller
+        const storageEnergy = storage ? storage.store[RESOURCE_ENERGY] : 0;
+        
+        if (storageEnergy > 50000 || (energyPercent > 0.7 && energyCapacity >= 800)) {
+            // We have energy to spare - boost upgraders significantly
+            const speedrunUpgraders = Math.min(15, Math.floor(energyCapacity / 150) + 3);
+            upgradersNeeded = Math.max(upgradersNeeded, speedrunUpgraders);
+            
+            if (Game.time % 100 === 0) {
+                console.log(`🚀 SPEEDRUN MODE: Boosting upgraders to ${upgradersNeeded} (Target: RCL ${SPEEDRUN_TARGET_RCL})`);
+            }
+        }
+        
+        // Reduce builders slightly during speedrun to focus on upgrading
+        if (constructionSitesCount < 10 && rcl >= 3) {
+            buildersNeeded = Math.max(1, buildersNeeded - 1);
+        }
+    }
 
     const result = {
         miner: Math.max(1, minersNeeded),
@@ -2341,6 +2528,65 @@ function displayStatusDashboard(room, creeps) {
         console.log(`\n⚠️  ISSUES: ${issues.join(', ')}`);
     }
     
+    // Version 1.3: Strategic Status
+    if (Memory.strategic) {
+        const cpuStats = Memory.strategic.cpuStats;
+        const militaryOps = Memory.strategic.militaryOperations;
+        const intel = Memory.strategic.roomIntelligence;
+        
+        console.log(`\n--- v1.3 TACTICAL STATUS ---`);
+        
+        // CPU efficiency
+        const bucketRecovery = cpuStats.averageBucketRecovery || 0;
+        const bucket = Game.cpu.bucket;
+        let statusIcon = '✅';
+        let statusMsg = 'OPTIMAL';
+        
+        if (bucket < CRITICAL_BUCKET_THRESHOLD) {
+            statusIcon = '🚨';
+            statusMsg = 'CRITICAL - Military paused';
+        } else if (bucketRecovery < BUCKET_RECOVERY_FLOOR) {
+            statusIcon = '⚠️';
+            statusMsg = 'LOW recovery';
+        } else if (bucketRecovery < MIN_BUCKET_RECOVERY_RATE) {
+            statusIcon = '⚠️';
+            statusMsg = 'Below target';
+        }
+        
+        console.log(`${statusIcon} CPU: Bucket ${bucket}/10000, Recovery: ${bucketRecovery.toFixed(1)}/tick (${statusMsg})`);
+        
+        // Military population
+        if (rcl >= MIN_RCL_FOR_MILITARY) {
+            const militaryCount = (creeps.warrior ? creeps.warrior.length : 0) + (creeps.healer ? creeps.healer.length : 0) + 
+                                 (creeps.dismantler ? creeps.dismantler.length : 0) + (creeps.raider ? creeps.raider.length : 0);
+            if (militaryCount > 0) {
+                console.log(`⚔️ Military: ${creeps.warrior ? creeps.warrior.length : 0} warriors, ${creeps.healer ? creeps.healer.length : 0} healers, ${creeps.raider ? creeps.raider.length : 0} raiders`);
+            }
+        }
+        
+        // Active assaults
+        const activeAssaults = Object.keys(militaryOps.activeAssaults).length;
+        if (activeAssaults > 0) {
+            console.log(`🎯 Active Assaults: ${activeAssaults}`);
+            for (const roomName in militaryOps.activeAssaults) {
+                const assault = militaryOps.activeAssaults[roomName];
+                console.log(`  - ${roomName}: ${assault.phase} phase (wave ${assault.wavesSent})`);
+            }
+        }
+        
+        // Intelligence summary
+        const intelCount = Object.keys(intel).length;
+        const conquerableRooms = Object.values(intel).filter(r => r.isConquerable).length;
+        if (intelCount > 0) {
+            console.log(`🔍 Intel: ${intelCount} rooms scouted, ${conquerableRooms} conquerable`);
+        }
+        
+        // Speedrun status
+        if (rcl < SPEEDRUN_TARGET_RCL) {
+            console.log(`🚀 SPEEDRUN to RCL ${SPEEDRUN_TARGET_RCL}: ${progressPercent}% complete`);
+        }
+    }
+    
     console.log('========================\n');
 }
 
@@ -2438,6 +2684,19 @@ function runCreep(creep) {
             break;
         case 'remoteBuilder':
             runRemoteBuilder(creep);
+            break;
+        // Version 1.3: Military roles
+        case 'warrior':
+            runWarrior(creep);
+            break;
+        case 'healer':
+            runHealer(creep);
+            break;
+        case 'dismantler':
+            runDismantler(creep);
+            break;
+        case 'raider':
+            runRaider(creep);
             break;
     }
 }
@@ -4770,6 +5029,825 @@ function runRemoteBuilder(creep) {
             }
         }
     }
+}
+
+// ========================================
+// VERSION 1.3: MILITARY CREEP ROLES
+// ========================================
+
+/**
+ * Warrior behavior - attacks hostile creeps and structures
+ */
+function runWarrior(creep) {
+    const targetRoom = creep.memory.assaultTarget;
+    
+    if (!targetRoom) {
+        console.log(`⚠️ Warrior ${creep.name} has no assault target!`);
+        return;
+    }
+    
+    // Move to target room if not there
+    if (creep.room.name !== targetRoom) {
+        const exitDir = creep.room.findExitTo(targetRoom);
+        const exit = creep.pos.findClosestByPath(exitDir);
+        if (exit) {
+            creep.moveTo(exit, { visualizePathStyle: { stroke: '#ff0000' } });
+        }
+        return;
+    }
+    
+    // In target room - engage hostiles
+    const hostileCreeps = creep.room.find(FIND_HOSTILE_CREEPS);
+    
+    if (hostileCreeps.length > 0) {
+        // Prioritize hostile creeps with attack parts
+        const threats = _.filter(hostileCreeps, h => {
+            return h.getActiveBodyparts(ATTACK) > 0 || 
+                   h.getActiveBodyparts(RANGED_ATTACK) > 0;
+        });
+        
+        const target = threats.length > 0 ? 
+            creep.pos.findClosestByRange(threats) : 
+            creep.pos.findClosestByRange(hostileCreeps);
+        
+        if (target) {
+            if (creep.attack(target) === ERR_NOT_IN_RANGE) {
+                creep.moveTo(target, { visualizePathStyle: { stroke: '#ff0000' } });
+            }
+        }
+    } else {
+        // No hostile creeps - attack hostile structures
+        const hostileStructures = creep.room.find(FIND_HOSTILE_STRUCTURES, {
+            filter: s => s.structureType !== STRUCTURE_CONTROLLER &&
+                        s.structureType !== STRUCTURE_STORAGE &&
+                        s.structureType !== STRUCTURE_TERMINAL
+        });
+        
+        if (hostileStructures.length > 0) {
+            // Prioritize spawns and towers
+            const priority = _.filter(hostileStructures, s => 
+                s.structureType === STRUCTURE_SPAWN || 
+                s.structureType === STRUCTURE_TOWER
+            );
+            
+            const target = priority.length > 0 ?
+                creep.pos.findClosestByRange(priority) :
+                creep.pos.findClosestByRange(hostileStructures);
+            
+            if (target) {
+                if (creep.attack(target) === ERR_NOT_IN_RANGE) {
+                    creep.moveTo(target, { visualizePathStyle: { stroke: '#ff0000' } });
+                }
+            }
+        } else {
+            // Room is clear - move to center
+            creep.moveTo(25, 25);
+        }
+    }
+}
+
+/**
+ * Healer behavior - follows and heals warriors
+ */
+function runHealer(creep) {
+    const targetRoom = creep.memory.assaultTarget;
+    
+    if (!targetRoom) {
+        console.log(`⚠️ Healer ${creep.name} has no assault target!`);
+        return;
+    }
+    
+    // Find warriors to follow
+    const warriors = _.filter(Game.creeps, c => 
+        c.memory.role === 'warrior' && 
+        c.memory.assaultTarget === targetRoom
+    );
+    
+    // Heal wounded warriors or self
+    const woundedWarriors = _.filter(warriors, w => w.hits < w.hitsMax);
+    const woundedInRange = _.filter(woundedWarriors, w => creep.pos.getRangeTo(w) <= 3);
+    
+    if (creep.hits < creep.hitsMax) {
+        // Heal self
+        creep.heal(creep);
+    } else if (woundedInRange.length > 0) {
+        const target = creep.pos.findClosestByRange(woundedInRange);
+        if (creep.pos.getRangeTo(target) === 1) {
+            creep.heal(target);
+        } else {
+            creep.rangedHeal(target);
+        }
+    }
+    
+    // Movement logic
+    if (creep.room.name !== targetRoom) {
+        // Move to target room
+        const exitDir = creep.room.findExitTo(targetRoom);
+        const exit = creep.pos.findClosestByPath(exitDir);
+        if (exit) {
+            creep.moveTo(exit, { visualizePathStyle: { stroke: '#00ff00' } });
+        }
+    } else {
+        // In target room - stay with warriors
+        if (warriors.length > 0) {
+            const warrior = creep.pos.findClosestByRange(warriors);
+            if (warrior && creep.pos.getRangeTo(warrior) > 2) {
+                creep.moveTo(warrior, { visualizePathStyle: { stroke: '#00ff00' } });
+            }
+        }
+    }
+}
+
+/**
+ * Dismantler behavior - dismantles hostile structures
+ */
+function runDismantler(creep) {
+    const targetRoom = creep.memory.assaultTarget;
+    
+    if (!targetRoom) {
+        console.log(`⚠️ Dismantler ${creep.name} has no assault target!`);
+        return;
+    }
+    
+    // Move to target room if not there
+    if (creep.room.name !== targetRoom) {
+        const exitDir = creep.room.findExitTo(targetRoom);
+        const exit = creep.pos.findClosestByPath(exitDir);
+        if (exit) {
+            creep.moveTo(exit, { visualizePathStyle: { stroke: '#ffff00' } });
+        }
+        return;
+    }
+    
+    // In target room - dismantle structures
+    const hostileStructures = creep.room.find(FIND_HOSTILE_STRUCTURES, {
+        filter: s => s.structureType !== STRUCTURE_CONTROLLER
+    });
+    
+    if (hostileStructures.length > 0) {
+        // Prioritize important structures
+        const priority = _.filter(hostileStructures, s => 
+            s.structureType === STRUCTURE_SPAWN || 
+            s.structureType === STRUCTURE_TOWER ||
+            s.structureType === STRUCTURE_STORAGE ||
+            s.structureType === STRUCTURE_TERMINAL
+        );
+        
+        const target = priority.length > 0 ?
+            creep.pos.findClosestByRange(priority) :
+            creep.pos.findClosestByRange(hostileStructures);
+        
+        if (target) {
+            if (creep.dismantle(target) === ERR_NOT_IN_RANGE) {
+                creep.moveTo(target, { visualizePathStyle: { stroke: '#ffff00' } });
+            }
+        }
+    } else {
+        // Check for walls and ramparts to clear
+        const walls = creep.room.find(FIND_STRUCTURES, {
+            filter: s => s.structureType === STRUCTURE_WALL || s.structureType === STRUCTURE_RAMPART
+        });
+        
+        if (walls.length > 0) {
+            const target = creep.pos.findClosestByRange(walls);
+            if (target) {
+                if (creep.dismantle(target) === ERR_NOT_IN_RANGE) {
+                    creep.moveTo(target, { visualizePathStyle: { stroke: '#ffff00' } });
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Raider behavior - extracts resources from conquered rooms
+ */
+function runRaider(creep) {
+    const targetRoom = creep.memory.assaultTarget;
+    const homeRoom = creep.memory.homeRoom;
+    
+    if (!targetRoom || !homeRoom) {
+        console.log(`⚠️ Raider ${creep.name} missing target or home room!`);
+        return;
+    }
+    
+    // State machine: collecting or depositing
+    if (creep.memory.collecting && creep.store.getFreeCapacity() === 0) {
+        creep.memory.collecting = false;
+    }
+    if (!creep.memory.collecting && creep.store.getUsedCapacity() === 0) {
+        creep.memory.collecting = true;
+    }
+    
+    if (creep.memory.collecting) {
+        // Go to target room and collect resources
+        if (creep.room.name !== targetRoom) {
+            const exitDir = creep.room.findExitTo(targetRoom);
+            const exit = creep.pos.findClosestByPath(exitDir);
+            if (exit) {
+                creep.moveTo(exit, { visualizePathStyle: { stroke: '#ffaa00' } });
+            }
+            return;
+        }
+        
+        // In target room - find resources
+        const droppedResources = creep.room.find(FIND_DROPPED_RESOURCES);
+        const ruins = creep.room.find(FIND_RUINS, {
+            filter: r => r.store.getUsedCapacity() > 0
+        });
+        const tombstones = creep.room.find(FIND_TOMBSTONES, {
+            filter: t => t.store.getUsedCapacity() > 0
+        });
+        
+        // Try to pick up dropped resources first
+        if (droppedResources.length > 0) {
+            const resource = creep.pos.findClosestByPath(droppedResources);
+            if (resource) {
+                if (creep.pickup(resource) === ERR_NOT_IN_RANGE) {
+                    creep.moveTo(resource, { visualizePathStyle: { stroke: '#ffaa00' } });
+                }
+                return;
+            }
+        }
+        
+        // Try ruins
+        if (ruins.length > 0) {
+            const ruin = creep.pos.findClosestByPath(ruins);
+            if (ruin) {
+                const resourceType = Object.keys(ruin.store)[0];
+                if (creep.withdraw(ruin, resourceType) === ERR_NOT_IN_RANGE) {
+                    creep.moveTo(ruin, { visualizePathStyle: { stroke: '#ffaa00' } });
+                }
+                return;
+            }
+        }
+        
+        // Try tombstones
+        if (tombstones.length > 0) {
+            const tombstone = creep.pos.findClosestByPath(tombstones);
+            if (tombstone) {
+                const resourceType = Object.keys(tombstone.store)[0];
+                if (creep.withdraw(tombstone, resourceType) === ERR_NOT_IN_RANGE) {
+                    creep.moveTo(tombstone, { visualizePathStyle: { stroke: '#ffaa00' } });
+                }
+                return;
+            }
+        }
+        
+        // Try hostile storage/terminal (only if undefended)
+        const hostileCreeps = creep.room.find(FIND_HOSTILE_CREEPS);
+        if (hostileCreeps.length === 0) {
+            const storage = creep.room.find(FIND_HOSTILE_STRUCTURES, {
+                filter: s => (s.structureType === STRUCTURE_STORAGE || 
+                            s.structureType === STRUCTURE_TERMINAL) &&
+                            s.store.getUsedCapacity() > 0
+            });
+            
+            if (storage.length > 0) {
+                const target = storage[0];
+                const resourceType = Object.keys(target.store)[0];
+                if (creep.withdraw(target, resourceType) === ERR_NOT_IN_RANGE) {
+                    creep.moveTo(target, { visualizePathStyle: { stroke: '#ffaa00' } });
+                }
+                return;
+            }
+        }
+        
+    } else {
+        // Return home and deposit
+        if (creep.room.name !== homeRoom) {
+            const exitDir = creep.room.findExitTo(homeRoom);
+            const exit = creep.pos.findClosestByPath(exitDir);
+            if (exit) {
+                creep.moveTo(exit, { visualizePathStyle: { stroke: '#00ffff' } });
+            }
+            return;
+        }
+        
+        // In home room - deposit to storage or spawn
+        const storage = creep.room.storage;
+        if (storage) {
+            const resourceType = Object.keys(creep.store)[0];
+            if (creep.transfer(storage, resourceType) === ERR_NOT_IN_RANGE) {
+                creep.moveTo(storage, { visualizePathStyle: { stroke: '#00ffff' } });
+            }
+        } else {
+            const spawn = creep.room.find(FIND_MY_SPAWNS)[0];
+            if (spawn) {
+                if (creep.transfer(spawn, RESOURCE_ENERGY) === ERR_NOT_IN_RANGE) {
+                    creep.moveTo(spawn, { visualizePathStyle: { stroke: '#00ffff' } });
+                }
+            }
+        }
+    }
+}
+
+// ========================================
+// VERSION 1.3: STRATEGIC SYSTEMS
+// ========================================
+
+/**
+ * Initialize strategic memory for version 1.3 features
+ */
+function initializeStrategicMemory() {
+    if (!Memory.strategic) {
+        Memory.strategic = {
+            version: VERSION,
+            cpuStats: {
+                samples: [],
+                averageBucketRecovery: 0,
+                lastCheck: Game.time
+            },
+            roomIntelligence: {}, // roomName -> intelligence data
+            militaryOperations: {
+                activeAssaults: {},
+                conquestHistory: [],
+                lastConquest: 0
+            },
+            controlledRooms: [], // Track all our controlled rooms
+            abandonmentQueue: [] // Rooms marked for abandonment
+        };
+    }
+}
+
+/**
+ * Monitor CPU performance and bucket recovery rate
+ * Alerts if we're below efficiency threshold
+ */
+function monitorCPUPerformance() {
+    const cpuStats = Memory.strategic.cpuStats;
+    
+    // Sample every 10 ticks
+    if (Game.time % 10 !== 0) return;
+    
+    // Calculate bucket change over last 10 ticks
+    const currentBucket = Game.cpu.bucket;
+    if (cpuStats.lastBucket !== undefined) {
+        const bucketChange = currentBucket - cpuStats.lastBucket;
+        const recoveryRate = bucketChange / 10; // Per tick
+        
+        cpuStats.samples.push({
+            tick: Game.time,
+            bucket: currentBucket,
+            recoveryRate: recoveryRate,
+            cpuUsed: Game.cpu.getUsed()
+        });
+        
+        // Keep last 100 samples (1000 ticks of data)
+        if (cpuStats.samples.length > 100) {
+            cpuStats.samples.shift();
+        }
+        
+        // Calculate average recovery rate
+        const recentSamples = cpuStats.samples.slice(-10); // Last 100 ticks
+        cpuStats.averageBucketRecovery = _.sum(recentSamples.map(s => s.recoveryRate)) / recentSamples.length;
+        
+        // Alert if below target threshold (but don't stop operations)
+        if (cpuStats.averageBucketRecovery < MIN_BUCKET_RECOVERY_RATE && Game.time % 100 === 0) {
+            console.log(`⚠️ CPU EFFICIENCY: Bucket recovery ${cpuStats.averageBucketRecovery.toFixed(1)}/tick (target: ${MIN_BUCKET_RECOVERY_RATE}+, continuing ops)`);
+        }
+        
+        // Critical alert if recovery is very low
+        if (cpuStats.averageBucketRecovery < BUCKET_RECOVERY_FLOOR && Game.time % 50 === 0) {
+            console.log(`🚨 CPU CRITICAL: Recovery at ${cpuStats.averageBucketRecovery.toFixed(1)}/tick (floor: ${BUCKET_RECOVERY_FLOOR})`);
+        }
+    }
+    
+    cpuStats.lastBucket = currentBucket;
+    cpuStats.lastCheck = Game.time;
+}
+
+/**
+ * Get current CPU efficiency status
+ */
+function getCPUEfficiency() {
+    const cpuStats = Memory.strategic.cpuStats;
+    const recoveryRate = cpuStats.averageBucketRecovery || 0;
+    const bucket = Game.cpu.bucket;
+    
+    return {
+        bucket: bucket,
+        averageRecovery: recoveryRate,
+        isEfficient: recoveryRate >= MIN_BUCKET_RECOVERY_RATE,
+        // Only stop military if bucket is critically low (< 1000)
+        canAffordMilitary: bucket >= CRITICAL_BUCKET_THRESHOLD,
+        // Warn if recovery is dropping but don't gate military
+        recoveryWarning: recoveryRate < BUCKET_RECOVERY_FLOOR
+    };
+}
+
+/**
+ * Update intelligence data for all visible rooms
+ */
+function updateRoomIntelligence(homeRoom) {
+    const intel = Memory.strategic.roomIntelligence;
+    
+    for (const roomName in Game.rooms) {
+        const room = Game.rooms[roomName];
+        
+        // Skip rooms we own
+        if (room.controller && room.controller.my) {
+            continue;
+        }
+        
+        // Analyze room
+        const analysis = analyzeRoom(room, homeRoom);
+        
+        // Store or update intelligence
+        if (!intel[roomName]) {
+            intel[roomName] = {
+                firstSeen: Game.time,
+                lastUpdated: Game.time,
+                ...analysis
+            };
+        } else {
+            intel[roomName] = {
+                ...intel[roomName],
+                lastUpdated: Game.time,
+                ...analysis
+            };
+        }
+    }
+    
+    // Clean old intelligence (rooms not seen in 10000 ticks)
+    for (const roomName in intel) {
+        if (Game.time - intel[roomName].lastUpdated > 10000) {
+            delete intel[roomName];
+        }
+    }
+}
+
+/**
+ * Analyze a room for military intelligence
+ */
+function analyzeRoom(room, homeRoom) {
+    const controller = room.controller;
+    const sources = room.find(FIND_SOURCES);
+    const hostiles = room.find(FIND_HOSTILE_CREEPS);
+    const hostileStructures = room.find(FIND_HOSTILE_STRUCTURES);
+    const towers = _.filter(hostileStructures, s => s.structureType === STRUCTURE_TOWER);
+    const spawns = _.filter(hostileStructures, s => s.structureType === STRUCTURE_SPAWN);
+    const walls = room.find(FIND_STRUCTURES, {
+        filter: s => s.structureType === STRUCTURE_WALL || s.structureType === STRUCTURE_RAMPART
+    });
+    
+    // Calculate distance from home
+    const distance = Game.map.getRoomLinearDistance(homeRoom.name, room.name);
+    
+    // Determine room status
+    let status = 'neutral';
+    let owner = null;
+    let rcl = 0;
+    
+    if (controller) {
+        if (controller.owner) {
+            status = controller.owner.username === Memory.username ? 'owned' : 'hostile';
+            owner = controller.owner.username;
+            rcl = controller.level;
+        } else if (controller.reservation) {
+            status = controller.reservation.username === Memory.username ? 'reserved' : 'reserved-hostile';
+            owner = controller.reservation.username;
+        }
+    }
+    
+    // Calculate threat level (0-10)
+    let threatLevel = 0;
+    threatLevel += towers.length * 2; // Each tower = +2 threat
+    threatLevel += spawns.length * 1.5; // Each spawn = +1.5 threat
+    threatLevel += hostiles.length * 0.5; // Each hostile creep = +0.5 threat
+    threatLevel += rcl * 0.5; // Each RCL = +0.5 threat
+    threatLevel = Math.min(10, threatLevel);
+    
+    // Calculate energy value
+    const energyValue = sources.length * 1000; // Simple calculation
+    
+    // Calculate conquest difficulty (0-10)
+    let difficulty = 0;
+    difficulty += towers.length * 2;
+    difficulty += spawns.length * 1.5;
+    difficulty += (walls.length > 0 ? 2 : 0); // Has walls = +2
+    difficulty += rcl;
+    difficulty = Math.min(10, difficulty);
+    
+    // Calculate strategic value (0-100)
+    let strategicValue = 0;
+    strategicValue += sources.length * 20; // More sources = higher value
+    strategicValue += Math.max(0, 30 - distance * 5); // Closer = higher value
+    strategicValue -= difficulty * 5; // Harder = lower value
+    strategicValue -= threatLevel * 3; // More dangerous = lower value
+    strategicValue = Math.max(0, Math.min(100, strategicValue));
+    
+    // Determine if conquerable
+    const isConquerable = status === 'neutral' || 
+                          (status === 'hostile' && rcl <= 3 && towers.length <= MAX_HOSTILE_TOWERS_FOR_ASSAULT);
+    
+    return {
+        status: status,
+        owner: owner,
+        rcl: rcl,
+        sources: sources.length,
+        distance: distance,
+        threatLevel: threatLevel,
+        difficulty: difficulty,
+        strategicValue: strategicValue,
+        energyValue: energyValue,
+        isConquerable: isConquerable,
+        hostileCount: hostiles.length,
+        towerCount: towers.length,
+        spawnCount: spawns.length,
+        hasWalls: walls.length > 0
+    };
+}
+
+/**
+ * Aggressive reconnaissance - send scouts to explore aggressively
+ */
+function aggressiveReconnaissance(homeRoom) {
+    // Get all rooms within range
+    const roomsToScout = getRoomsInRange(homeRoom.name, AGGRESSIVE_SCOUT_RANGE);
+    
+    // Filter to rooms we haven't scouted recently
+    const intel = Memory.strategic.roomIntelligence;
+    const unstaleThreshold = Game.time - 1000; // Re-scout every 1000 ticks
+    
+    const needsScouting = roomsToScout.filter(roomName => {
+        return !intel[roomName] || intel[roomName].lastUpdated < unstaleThreshold;
+    });
+    
+    // Mark rooms for scouting
+    if (!Memory.scoutTargets) {
+        Memory.scoutTargets = [];
+    }
+    
+    for (const roomName of needsScouting) {
+        if (!Memory.scoutTargets.includes(roomName)) {
+            Memory.scoutTargets.push(roomName);
+        }
+    }
+}
+
+/**
+ * Get all rooms within a certain range
+ */
+function getRoomsInRange(centerRoom, range) {
+    const rooms = [];
+    const parsed = /^([WE])([0-9]+)([NS])([0-9]+)$/.exec(centerRoom);
+    if (!parsed) return rooms;
+    
+    const [, ew, x, ns, y] = parsed;
+    const centerX = parseInt(x);
+    const centerY = parseInt(y);
+    
+    for (let dx = -range; dx <= range; dx++) {
+        for (let dy = -range; dy <= range; dy++) {
+            if (dx === 0 && dy === 0) continue; // Skip center
+            
+            let newX = centerX + (ew === 'W' ? -dx : dx);
+            let newY = centerY + (ns === 'N' ? -dy : dy);
+            let newEW = ew;
+            let newNS = ns;
+            
+            // Handle coordinate wrapping
+            if (newX < 0) {
+                newX = Math.abs(newX);
+                newEW = ew === 'W' ? 'E' : 'W';
+            }
+            if (newY < 0) {
+                newY = Math.abs(newY);
+                newNS = ns === 'N' ? 'S' : 'N';
+            }
+            
+            rooms.push(`${newEW}${newX}${newNS}${newY}`);
+        }
+    }
+    
+    return rooms;
+}
+
+/**
+ * Plan and initiate military operations
+ */
+function planMilitaryOperations(homeRoom, creeps) {
+    const cpuEfficiency = getCPUEfficiency();
+    
+    // Only stop military if bucket is critically low
+    if (!cpuEfficiency.canAffordMilitary) {
+        if (Game.time % 50 === 0) {
+            console.log(`🚨 CRITICAL: Bucket at ${cpuEfficiency.bucket} - pausing new military operations`);
+        }
+        return;
+    }
+    
+    // Warn if recovery rate is low but continue operations
+    if (cpuEfficiency.recoveryWarning && Game.time % 100 === 0) {
+        console.log(`⚠️ CPU Recovery at ${cpuEfficiency.averageRecovery.toFixed(1)}/tick (low but continuing military ops)`);
+    }
+    
+    // Check cooldown
+    const militaryOps = Memory.strategic.militaryOperations;
+    if (Game.time - militaryOps.lastConquest < CONQUEST_COOLDOWN) {
+        return;
+    }
+    
+    // Find best target
+    const target = selectConquestTarget(homeRoom);
+    
+    if (target) {
+        // Check if we already have an active assault on this room
+        if (militaryOps.activeAssaults[target.roomName]) {
+            return; // Already assaulting
+        }
+        
+        // Initiate assault
+        console.log(`🎯 INITIATING ASSAULT on ${target.roomName} (Value: ${target.strategicValue}, Difficulty: ${target.difficulty})`);
+        
+        militaryOps.activeAssaults[target.roomName] = {
+            startTick: Game.time,
+            targetRoom: target.roomName,
+            homeRoom: homeRoom.name,
+            phase: 'prepare', // prepare, assault, raid, complete
+            wavesSent: 0,
+            creepsLost: 0
+        };
+    }
+}
+
+/**
+ * Select the best room to conquer
+ */
+function selectConquestTarget(homeRoom) {
+    const intel = Memory.strategic.roomIntelligence;
+    
+    // Get all conquerable rooms
+    const candidates = [];
+    for (const roomName in intel) {
+        const roomIntel = intel[roomName];
+        if (roomIntel.isConquerable && roomIntel.strategicValue > 20) {
+            candidates.push({
+                roomName: roomName,
+                ...roomIntel
+            });
+        }
+    }
+    
+    // Sort by strategic value
+    candidates.sort((a, b) => b.strategicValue - a.strategicValue);
+    
+    return candidates[0] || null;
+}
+
+/**
+ * Coordinate active assault waves
+ */
+function coordinateAssaultWaves(homeRoom) {
+    const militaryOps = Memory.strategic.militaryOperations;
+    
+    for (const roomName in militaryOps.activeAssaults) {
+        const assault = militaryOps.activeAssaults[roomName];
+        
+        // Check if assault is complete
+        if (assault.phase === 'complete') {
+            // Clean up
+            delete militaryOps.activeAssaults[roomName];
+            militaryOps.lastConquest = Game.time;
+            militaryOps.conquestHistory.push({
+                room: roomName,
+                tick: Game.time,
+                success: true
+            });
+            console.log(`✅ CONQUEST COMPLETE: ${roomName}`);
+            continue;
+        }
+        
+        // Count military creeps assigned to this assault
+        const assignedCreeps = _.filter(Game.creeps, c => 
+            c.memory.assaultTarget === roomName &&
+            (c.memory.role === 'warrior' || c.memory.role === 'healer' || c.memory.role === 'raider')
+        );
+        
+        // Update phase based on situation
+        const targetRoom = Game.rooms[roomName];
+        if (targetRoom) {
+            const hostiles = targetRoom.find(FIND_HOSTILE_CREEPS);
+            const hostileStructures = targetRoom.find(FIND_HOSTILE_STRUCTURES);
+            
+            if (hostiles.length === 0 && hostileStructures.length === 0) {
+                // Room is clear, move to raid phase
+                assault.phase = 'raid';
+            } else if (assault.phase === 'prepare' && assignedCreeps.length >= ASSAULT_WAVE_SIZE) {
+                // Ready to assault
+                assault.phase = 'assault';
+            }
+            
+            // Check for raiders
+            const raiders = _.filter(assignedCreeps, c => c.memory.role === 'raider');
+            if (assault.phase === 'raid' && raiders.length === 0) {
+                // Raid complete
+                assault.phase = 'complete';
+            }
+        }
+    }
+}
+
+/**
+ * Evaluate if we should abandon any rooms
+ */
+function evaluateRoomAbandonment() {
+    const controlledRooms = _.filter(Game.rooms, r => r.controller && r.controller.my);
+    
+    // Don't abandon if we only have 1-2 rooms
+    if (controlledRooms.length <= 2) {
+        return;
+    }
+    
+    // Evaluate each room
+    for (const room of controlledRooms) {
+        const score = evaluateRoomQuality(room);
+        
+        if (score < MIN_ENERGY_SCORE_FOR_KEEP) {
+            console.log(`🗑️ MARKING ${room.name} FOR ABANDONMENT (Score: ${score})`);
+            
+            if (!Memory.strategic.abandonmentQueue.includes(room.name)) {
+                Memory.strategic.abandonmentQueue.push(room.name);
+            }
+        }
+    }
+    
+    // Execute abandonment for queued rooms
+    executeRoomAbandonment();
+}
+
+/**
+ * Evaluate room quality for keeping vs abandoning
+ */
+function evaluateRoomQuality(room) {
+    const sources = room.find(FIND_SOURCES);
+    const controller = room.controller;
+    
+    let score = 0;
+    
+    // Source count and energy capacity
+    score += sources.length * 300;
+    score += _.sum(sources.map(s => s.energyCapacity)) / 50;
+    
+    // Controller level (higher is better, but not everything)
+    score += controller.level * 50;
+    
+    // Distance from primary spawn (closer is better)
+    const primarySpawn = Game.spawns[Object.keys(Game.spawns)[0]];
+    if (primarySpawn) {
+        const distance = Game.map.getRoomLinearDistance(primarySpawn.room.name, room.name);
+        score -= distance * 100;
+    }
+    
+    // Energy available
+    const storage = room.storage;
+    if (storage) {
+        score += storage.store[RESOURCE_ENERGY] / 100;
+    }
+    
+    return score;
+}
+
+/**
+ * Execute room abandonment
+ */
+function executeRoomAbandonment() {
+    const abandonQueue = Memory.strategic.abandonmentQueue;
+    
+    if (abandonQueue.length === 0) return;
+    
+    const roomToAbandon = abandonQueue[0];
+    const room = Game.rooms[roomToAbandon];
+    
+    if (!room || !room.controller || !room.controller.my) {
+        // Already abandoned or lost
+        abandonQueue.shift();
+        return;
+    }
+    
+    // Check if room is truly ready to abandon (no important creeps, extracted resources)
+    const storage = room.storage;
+    const terminal = room.terminal;
+    
+    const hasEnergy = (storage && storage.store[RESOURCE_ENERGY] > 10000) ||
+                      (terminal && terminal.store[RESOURCE_ENERGY] > 10000);
+    
+    if (hasEnergy) {
+        // Don't abandon yet, resources need to be extracted
+        console.log(`⏳ ${roomToAbandon} waiting for resource extraction before abandonment`);
+        return;
+    }
+    
+    // Unclaim controller
+    if (room.controller && room.controller.my) {
+        console.log(`🗑️ ABANDONING ROOM: ${roomToAbandon}`);
+        // Note: In actual Screeps, you'd need a creep to unclaim
+        // For now, we'll just mark it and stop managing it
+        room.controller.unclaim && room.controller.unclaim();
+    }
+    
+    abandonQueue.shift();
 }
 
 function manageCPUForPixels() {
