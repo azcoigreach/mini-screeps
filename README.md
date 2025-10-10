@@ -1,17 +1,17 @@
 
-# Mini-Screeps Bot - Throughput Optimized
+# Mini-Screeps Bot - Tactical Aggression & Expansion
 
-A minimal, self-contained Screeps bot focused on **Pixel earning** with advanced throughput optimization for maximum room efficiency. This bot operates autonomously with **remote harvesting** support (v1.2), implementing mathematical throughput calculations for optimal energy flow across multiple rooms.
+A minimal, self-contained Screeps bot focused on **aggressive expansion and pixel earning** with advanced throughput optimization and military conquest capabilities. This bot operates autonomously with **remote harvesting** (v1.2), **military operations** (v1.3), and multi-room control, implementing mathematical throughput calculations for optimal energy flow and tactical domination.
 
-**Version**: 1.2.1 | **File**: `main.js` (~4900 lines) | **Dependencies**: None
+**Version**: 1.3.0 | **File**: `main.js` (~6000 lines) | **Dependencies**: None
 
 ## 🎯 **Primary Goals**
 
-1. **Pixel Generation**: Earn Pixels by using 10,000 CPU per tick (1 Pixel per 10,000 CPU)
-2. **Base Maintenance**: Keep the room controller upgraded and maintain essential infrastructure
-3. **Room Efficiency**: Maximize energy throughput using mathematical calculations
-4. **CPU Optimization**: Minimize CPU usage through intelligent caching and optimization systems
-5. **Competitive Performance**: Advanced features for efficient autonomous operation
+1. **Survive & Dominate**: Speed run to RCL 5 in home rooms for rapid development
+2. **Aggressive Expansion**: Scout, conquer, and extract resources from neighboring rooms
+3. **Pixel Generation**: Earn Pixels efficiently while maintaining tactical operations
+4. **CPU Efficiency**: Target >150 bucket/tick recovery rate for sustainable expansion
+5. **Multi-Room Control**: Manage up to 3 controlled rooms with intelligent abandonment
 
 ## 🧮 **Throughput Mathematics**
 
@@ -140,6 +140,45 @@ Spawn/Extensions → Upgraders/Builders → Controller/Construction
   - Optimized for remote room energy transport
   - Count: 1 per remote room with 2+ sources (only high-value rooms)
 
+### **Warrior** (v1.3, RCL 4+)
+- **Purpose**: Front-line combat unit for room conquest
+- **Body**: `2 TOUGH, 6 MOVE, 4 ATTACK` (~1300 energy)
+- **Behavior**:
+  - Travels to target assault room
+  - Engages hostile creeps first (prioritizes threats)
+  - Destroys hostile spawns and towers
+  - Works with healers for sustained combat
+  - Count: 2 per active assault wave
+
+### **Healer** (v1.3, RCL 4+)
+- **Purpose**: Support unit for warriors during combat
+- **Body**: `4 MOVE, 4 HEAL` (~1000 energy)
+- **Behavior**:
+  - Follows warriors into combat
+  - Heals wounded warriors (prioritizes lowest HP)
+  - Self-heals when damaged
+  - Uses ranged heal at distance, melee heal up close
+  - Count: 1 per active assault wave
+
+### **Dismantler** (v1.3, RCL 4+)
+- **Purpose**: Structure destruction for clearing fortified rooms
+- **Body**: `1 MOVE, N WORK` (scalable based on energy)
+- **Behavior**:
+  - Dismantles hostile structures systematically
+  - Priority: Spawns → Towers → Storage → Walls
+  - Used for heavily fortified targets
+  - Count: 0-2 depending on target difficulty
+
+### **Raider** (v1.3, RCL 4+)
+- **Purpose**: Resource extraction from conquered rooms
+- **Body**: `6 CARRY, 6 MOVE` (~600 energy)
+- **Behavior**:
+  - Spawns after assault phase completes
+  - Collects dropped resources, loots ruins/tombstones
+  - Extracts from hostile storage/containers
+  - Returns all resources to home room
+  - Count: 1-3 per conquered room (raid phase)
+
 ## 🏘️ **Enhanced Base Layout**
 
 ### **Centralized Design**
@@ -225,46 +264,82 @@ Spawn/Extensions → Upgraders/Builders → Controller/Construction
 ## 🚀 **Getting Started**
 
 ### **Deployment**
-1. Copy `main.js` to your Screeps script directory
+1. Copy `main.js` to your Screeps script directory (or use `upload-to-screeps.sh`)
 2. The bot will automatically:
    - Calculate source-to-sink distances
-   - Plan optimal base layout with roads
+   - Plan optimal base layout with roads and defenses
    - Spawn efficiency-optimized creeps
    - Build infrastructure
+   - Scout adjacent rooms for intelligence
    - Start earning Pixels
+
+### **Progression Path**
+- **RCL 1-3**: Focus on economy, infrastructure, and defense
+- **RCL 4**: Military operations unlock, remote harvesting begins
+- **RCL 4-5**: Aggressive scouting, conquest campaigns, speedrun to RCL 5
+- **RCL 5+**: Full tactical capabilities, multi-room control, resource extraction
+- **RCL 7-8**: Multi-spawn support for rapid creep production
 
 ### **No Configuration Required**
 - Bot operates completely autonomously
 - No user input needed
-- Self-adapting to room conditions
+- Self-adapting to room conditions and threats
 - Mathematical optimization based on room layout
+- Tactical decisions made automatically
+- Configurable constants available for fine-tuning (optional)
 
 
 ## 📊 **Performance Monitoring**
 
-### **Console Output**
+### **Console Output (v1.3)**
+
+**Every 20 ticks** - Comprehensive status dashboard:
+```
+=== BASE STATUS RCL 4 ===
+Controller: 12500/45000 (27.8%) - 32500 to next RCL
+Energy: 800/800 (100%)
+
+--- POPULATION ---
+Miners: 2/2 | Haulers: 3/3 (2 busy, 1 idle)
+Upgraders: 8/8 | Builders: 2/2
+Remote: 2 miners, 1 haulers, 1 reservers, 1 scouts, 1 builders
+
+--- v1.3 TACTICAL STATUS ---
+✅ CPU: Bucket 9245/10000, Recovery: 245.3/tick (target: 150+)
+⚔️ Military: 2 warriors, 1 healers, 0 raiders
+🎯 Active Assaults: 1
+  - W1N1: assault phase (wave 1)
+🔍 Intel: 15 rooms scouted, 3 conquerable
+🚀 SPEEDRUN to RCL 5: 27.8% complete
+========================
+```
+
+**Occasional Events:**
 - **Distance Calculation**: `Distance calculation complete: avg=XX, Trtt=XX, carryNeeded=XX`
-- **Creep Status**: `Creeps: M:2/2, H:2/2, U:3/4, B:1/1`
-- **Energy Flow**: `Energy Flow: 20 e/t → Builders:10, Upgraders:10, Missing:5`
-- **Pixel Generation**: `🎯 PIXEL GENERATED! Bucket: XXXX → XXXX, Pixels: X`
-- **CPU Status**: `CPU: XX.XX/XX, Bucket: XXXX, Pixels: X` (every 100 ticks)
+- **Pixel Generation**: `🎯 PIXEL GENERATED! Bucket: 10000 → 0, Pixels: X`
+- **Military Operations**: `🎯 Assault started on W1N1 (threat: 4.5, value: 65)`
+- **Room Abandonment**: `🗑️ Abandoning W2S1 (quality score: 425 < 500)`
+- **Speedrun Activation**: `🚀 SPEEDRUN MODE: Boosting upgraders to 12 (Target: RCL 5)`
 
 ### **Key Metrics**
-- CPU usage efficiency
-- Pixel generation rate
-- Energy throughput (20 e/t target)
-- Creep population balance
-- Construction progress
-- Distance-based optimizations
+- **CPU efficiency**: Bucket recovery rate (target: 150+/tick)
+- **Pixel generation rate**: Typically 1 pixel every 40-60 ticks
+- **Energy throughput**: 20-80 e/t (base + remotes + conquered rooms)
+- **Creep population balance**: Core + remote + military
+- **Construction progress**: Tracked per room
+- **Military effectiveness**: Conquests per 1000 ticks
+- **Room quality**: Scoring for abandonment decisions
+- **Intelligence coverage**: Rooms scouted and analyzed
 
 ## 🎮 **Features**
 
 ### **✅ What It Does**
+
+**Core Economy & Infrastructure:**
 - Earns Pixels efficiently with optimized CPU usage
 - Maintains room controller with mathematical precision and adaptive scaling
 - Builds essential infrastructure with smart placement
 - Manages energy distribution using throughput calculations
-- Self-contained operation with no user interaction
 - Implements advanced throughput mathematics
 - Automatically plans roads for efficiency
 - Dynamic energy allocation based on room needs
@@ -275,15 +350,38 @@ Spawn/Extensions → Upgraders/Builders → Controller/Construction
 - **Structure caching** for CPU optimization
 - **Priority-based tower repairs** for critical infrastructure
 - **Road maintenance system** to preserve movement efficiency
-- **Remote harvesting** (v1.2): Automatic scouting, reservation, and mining of adjacent rooms (RCL 4+)
-- **Multi-spawn support** (v1.2): 2 spawns at RCL 7, 3 spawns at RCL 8 for faster creep production
+- **Multi-spawn support** (v1.2): 2 spawns at RCL 7, 3 spawns at RCL 8
+
+**Remote Operations (v1.2):**
+- **Remote harvesting**: Automatic scouting, reservation, and mining of adjacent rooms (RCL 4+)
+- **Spawn area detection**: Automatically detects and skips blocked rooms
+- **Smart room selection**: Activates best rooms based on RCL (1-3 remote rooms)
+- **Infrastructure planning**: Containers and roads in remote rooms
+- **Throughput calculations**: Spawns haulers based on remote distance
+
+**Military & Expansion (v1.3):**
+- **Room intelligence system**: Automatic threat assessment and strategic scoring
+- **Aggressive reconnaissance**: Scouts 3 rooms out in all directions
+- **Tactical conquest**: Phased assault system (Prepare → Assault → Raid → Complete)
+- **Military creeps**: Warriors, Healers, Dismantlers, Raiders
+- **Resource extraction**: Raiders collect loot from conquered rooms
+- **Room abandonment**: Quality-based evaluation and automatic unclaiming
+- **RCL 5 speedrun**: Boosts upgraders for rapid progression
+- **Multi-room control**: Manages up to 3 controlled rooms simultaneously
+- **CPU monitoring**: Recovery rate tracking with aggressive expansion stance
+
+**Automation & Intelligence:**
+- Self-contained operation with no user interaction required
+- Comprehensive status dashboard with tactical indicators
+- Continuous intelligence gathering and room evaluation
+- Adaptive spawning based on CPU efficiency and room needs
 
 ### **❌ What It Doesn't Do**
-- No room claiming/expansion (only remote harvesting)
-- No Labs or Factories
-- No complex resource processing
-- No user interaction
-- No manual configuration
+- No Labs or Factories (yet)
+- No complex resource processing or minerals
+- No manual user interaction required
+- No market trading (yet)
+- No power creeps (yet)
 
 ## 🔧 **Technical Details**
 
@@ -333,21 +431,42 @@ Spawn/Extensions → Upgraders/Builders → Controller/Construction
 
 ### **Configuration Constants**
 
-Defense configuration:
+**v1.3 Tactical Settings:**
+- `VERSION` (default: '1.3'): Bot version identifier
+- `MIN_BUCKET_RECOVERY_RATE` (default: 150): Target CPU efficiency (bucket/tick)
+- `MAX_CONTROLLED_ROOMS` (default: 3): Maximum concurrent rooms
+- `SPEEDRUN_TARGET_RCL` (default: 5): Speed run target level
+- `AGGRESSIVE_SCOUT_RANGE` (default: 3): Scout distance in rooms
+- `CONQUEST_COOLDOWN` (default: 1000): Ticks between conquests
+- `ROOM_ABANDON_CHECK_INTERVAL` (default: 5000): Abandonment check frequency
+
+**v1.3 Military Settings:**
+- `ENABLE_MILITARY` (default: true): Master military switch
+- `MIN_RCL_FOR_MILITARY` (default: 4): Minimum RCL for military ops
+- `ASSAULT_WAVE_SIZE` (default: 3): Creeps per assault wave
+- `CRITICAL_BUCKET_THRESHOLD` (default: 1000): Stop military at this bucket level
+- `BUCKET_RECOVERY_FLOOR` (default: 100): Warning threshold for recovery rate
+
+**v1.3 Evaluation Thresholds:**
+- `MIN_SOURCES_FOR_CONQUEST` (default: 1): Minimum sources worth conquering
+- `MAX_HOSTILE_TOWERS_FOR_ASSAULT` (default: 2): Maximum towers we'll assault
+- `MIN_ENERGY_SCORE_FOR_KEEP` (default: 500): Minimum score to keep room
+
+**Defense Configuration:**
 - `ENTRANCE_CURTAIN_DEPTH` (default: 2): Depth in tiles from the room edge for the interior curtain
 - `ENTRANCE_OVERHANG_TILES` (default: 2): Overhang in tiles beyond the entrance ends for both the curtain and the book-ends
 - `WALL_TARGET_HITS`: RCL-scaled wall hit points (1K @ RCL1 → 10M @ RCL8)
 - `RAMPART_TARGET_HITS`: RCL-scaled rampart hit points
 - `TOWER_REFILL_THRESHOLD` (default: 0.5): 50% energy threshold for tower refills
 
-Optimization configuration (v1.1.0+):
+**Optimization Configuration (v1.1.0+):**
 - `CREEP_RECYCLE_TTL` (default: 50): When to start recycling creeps
 - `EMERGENCY_ENERGY_THRESHOLD` (default: 300): Low energy emergency level
 - `CONTROLLER_DOWNGRADE_EMERGENCY` (default: 5000): Controller emergency threshold
 - `CONTAINER_REPAIR_THRESHOLD` (default: 20000): Absolute hits threshold for container repair
 - `CONTAINER_REPAIR_PERCENT` (default: 0.5): Repair containers below 50% HP
 
-These constants are defined near the top of `main.js` and can be adjusted for different strategies.
+All constants are defined near the top of `main.js` and can be adjusted for different strategies. See `V1.3_QUICK_REFERENCE.md` for tuning examples.
 
 ## 📈 **Optimization Focus**
 
@@ -446,7 +565,324 @@ The bot automatically scouts, evaluates, and harvests energy from adjacent rooms
 - Remote infrastructure planning every 50 ticks
 - Worth the investment for 3x energy income
 
+## ⚔️ **Military Operations System (v1.3)**
+
+### **Overview**
+Version 1.3 adds aggressive tactical capabilities, enabling the bot to scout, evaluate, conquer, and extract resources from neighboring rooms. Military operations unlock at RCL 4 and operate alongside the existing economic systems.
+
+### **Room Intelligence System**
+- **Automatic Analysis**: All visible rooms analyzed for strategic value
+- **Threat Assessment**: Calculates threat level (0-10) based on:
+  - Towers: +2 per tower
+  - Spawns: +1.5 per spawn
+  - Hostile creeps: +0.5 each
+  - RCL: +0.5 per level
+- **Strategic Scoring**: Evaluates rooms based on:
+  - Sources: +20 points each
+  - Distance: +30 base, -5 per room away
+  - Difficulty: -5 per difficulty point
+  - Threat: -3 per threat point
+- **Conquest Evaluation**: Determines conquerable targets
+
+### **Aggressive Reconnaissance**
+- **Extended Scouting**: Scouts 3 rooms out in all directions
+- **Continuous Updates**: Re-scouts rooms every 1000 ticks
+- **Target Queue**: Maintains list of rooms needing exploration
+- **Military Intelligence**: Gathers data for tactical decisions
+
+### **Room Conquest System**
+Automatically selects and conquers the best target rooms based on:
+- **Minimum Requirements**:
+  - At least 1 source
+  - Maximum 2 hostile towers
+  - Strategic value > 20
+  - Cooldown elapsed (1000 ticks between conquests)
+  - CPU bucket ≥ 1000 (only stops at critical levels!)
+
+### **Assault Phases**
+```
+1. PREPARE → Spawn warriors and healers
+2. ASSAULT → Clear all hostiles and structures
+3. RAID    → Extract resources with raiders
+4. COMPLETE → Mission accomplished
+```
+
+### **Room Abandonment Logic**
+- **Quality Evaluation**: Scores rooms based on:
+  - Sources × 300
+  - Energy capacity / 50
+  - Controller level × 50
+  - Distance penalty × 100
+  - Storage energy / 100
+- **Abandonment Threshold**: Rooms scoring < 500 are abandoned
+- **Safety Check**: Won't abandon if ≤ 2 rooms remain
+- **Resource Extraction**: Waits for resource evacuation before abandoning
+
+### **RCL 5 Speedrun Optimization**
+- **Upgrader Boost**: Increases to 15 upgraders when below RCL 5
+- **Activation Conditions**: Storage > 50k energy OR spawn > 70% full
+- **Builder Reduction**: Reduces builders when < 10 construction sites
+- **Console Indicator**: Shows `🚀 SPEEDRUN MODE` when active
+
+## 💻 **CPU Management Philosophy (v1.3)**
+
+### **Recovery Rate Focus**
+Unlike traditional Screeps bots, v1.3 focuses on **bucket recovery rate** rather than absolute bucket level. This is critical for pixel generation, as the bucket is frequently drained to 0 when generating pixels.
+
+### **Key Concept**
+```
+Recovery Rate = (current bucket - previous bucket) / ticks elapsed
+```
+
+**This is the ONLY metric that matters for sustainable operation!**
+
+### **CPU Thresholds**
+
+| Recovery Rate | Status | Action |
+|---------------|--------|--------|
+| ≥ 150/tick | ✅ OPTIMAL | Full operations |
+| 100-149/tick | ⚠️ Below target | Continue with warning |
+| 50-99/tick | ⚠️ LOW | Continue with warning |
+| < 50/tick | 🚨 SLOW | Warn more but continue |
+| Bucket < 1000 | 🚨 CRITICAL | Pause new military ops |
+
+### **Aggressive Philosophy**
+v1.3 adopts an **aggressive stance** on CPU management:
+- **Monitor, Don't Block**: Warns about low recovery but continues operations
+- **Only Critical Pauses**: Military only stops when bucket < 1000
+- **Recovery-Focused**: Ignores bucket level, tracks recovery rate
+- **Pixel Compatible**: Works perfectly when bucket = 0 after pixel generation
+
+### **Why This Works**
+With 245 bucket/tick recovery (typical), you can:
+- Generate a pixel every ~41 ticks
+- Run full military operations
+- Control 3+ rooms
+- Stay in positive CPU balance
+- All while bucket fluctuates between 0 and 10,000!
+
+See `CPU_MANAGEMENT.md` for detailed explanation.
+
+## 📊 **Enhanced Status Dashboard (v1.3)**
+
+Every 20 ticks, the console displays comprehensive tactical status:
+
+```
+=== BASE STATUS RCL 4 ===
+Controller: 12500/45000 (27.8%) - 32500 to next RCL
+Energy: 800/800 (100%)
+
+--- POPULATION ---
+Miners: 2/2 | Haulers: 3/3 (2 busy, 1 idle)
+Upgraders: 8/8 | Builders: 2/2
+
+--- v1.3 TACTICAL STATUS ---
+✅ CPU: Bucket 9245/10000, Recovery: 245.3/tick (target: 150+)
+⚔️ Military: 2 warriors, 1 healers, 0 raiders
+🎯 Active Assaults: 1
+  - W1N1: assault phase (wave 1)
+🔍 Intel: 15 rooms scouted, 3 conquerable
+🚀 SPEEDRUN to RCL 5: 27.8% complete
+========================
+```
+
+### **Status Icons**
+- 🚀 Speedrun mode active
+- ⚔️ Military units deployed
+- 🎯 Active assault in progress
+- 🔍 Intelligence gathered
+- ✅ CPU efficiency good
+- ⚠️ CPU efficiency warning
+- 💰 Raider collecting resources
+- 💚 Healer supporting warriors
+
+## 📤 **Code Deployment**
+
+### **MCP Server (Recommended)** 🤖
+The repository includes a **Model Context Protocol (MCP) server** for AI-assisted bot development! Use it with Claude Desktop or any MCP-compatible client.
+
+**Features:**
+- 🚀 Upload code to Screeps
+- 🔍 Monitor console logs and errors
+- 🐛 Automatic troubleshooting with recommendations
+- 💾 Memory access and management
+- 📊 Performance analysis (CPU, bucket, GCL)
+- 🗺️ Room information and terrain data
+- ⚡ Execute console commands
+
+**Quick Setup:**
+```bash
+cd screeps-mcp
+npm install
+cp .env.example .env
+# Edit .env and add your SCREEPS_TOKEN
+```
+
+**See `screeps-mcp/README.md` and `screeps-mcp/QUICK_START.md` for full documentation.**
+
+### **Upload Script**
+The repository also includes `upload-to-screeps.sh` for easy code deployment to your Screeps account. See `UPLOAD_README.md` for full instructions.
+
+**Quick Start:**
+```bash
+# Set your auth token
+export SCREEPS_TOKEN='your_token_here'
+
+# Upload to default branch
+./upload-to-screeps.sh
+
+# Or upload to specific branch
+SCREEPS_BRANCH='experimental' ./upload-to-screeps.sh
+```
+
+**Prerequisites:**
+- `curl` (pre-installed on most systems)
+- `jq` for JSON processing: `sudo apt-get install jq`
+
+**Token Setup:**
+1. Go to https://screeps.com/a/#!/account/auth-tokens
+2. Generate a token with "Full Access"
+3. Set as environment variable or in `~/.screeps-config`
+
+## 🔧 **Troubleshooting & Tips (v1.3)**
+
+### **Common Issues**
+
+**"⚠️ CPU EFFICIENCY WARNING"**
+- **Cause**: Bucket recovery rate < 150/tick
+- **Solution**: 
+  - Reduce scout range: `AGGRESSIVE_SCOUT_RANGE = 2`
+  - Disable military temporarily: `ENABLE_MILITARY = false`
+  - Reduce max controlled rooms: `MAX_CONTROLLED_ROOMS = 2`
+  - Let bucket recover naturally
+
+**No Military Operations Starting**
+- **Check**:
+  1. RCL ≥ 4? (`Game.rooms['W1N1'].controller.level`)
+  2. Bucket ≥ 1000? (`Game.cpu.bucket`)
+  3. Military enabled? (`ENABLE_MILITARY = true`)
+  4. Conquerable rooms scouted? (Check console dashboard)
+  5. Cooldown elapsed? (1000 ticks between conquests)
+
+**Raiders Not Spawning**
+- **Cause**: Assault must be in 'raid' phase
+- **Solution**: Wait for warriors to clear all hostiles first
+- **Check**: Active assaults display shows current phase
+
+**Bot Too Aggressive (Bucket Dropping)**
+- **Solutions**:
+  - Increase critical threshold: `CRITICAL_BUCKET_THRESHOLD = 3000`
+  - Increase conquest cooldown: `CONQUEST_COOLDOWN = 2000`
+  - Reduce max towers: `MAX_HOSTILE_TOWERS_FOR_ASSAULT = 1`
+  - Reduce controlled rooms: `MAX_CONTROLLED_ROOMS = 2`
+
+**Bot Not Aggressive Enough**
+- **Solutions**:
+  - Decrease critical threshold: `CRITICAL_BUCKET_THRESHOLD = 500`
+  - Decrease conquest cooldown: `CONQUEST_COOLDOWN = 500`
+  - Increase scout range: `AGGRESSIVE_SCOUT_RANGE = 4`
+  - Increase max towers: `MAX_HOSTILE_TOWERS_FOR_ASSAULT = 3`
+
+### **Best Practices**
+
+**Early Game (RCL 1-3):**
+1. Focus on economy first
+2. Build defensive walls and towers
+3. Let the bot scout passively
+4. Don't worry about military yet
+
+**Mid Game (RCL 4):**
+1. Military unlocks - let it scout aggressively
+2. Monitor CPU efficiency warnings
+3. First conquest should be easy target (0-1 towers)
+4. Keep bucket above 5000 for safety
+
+**Late Game (RCL 5+):**
+1. Speedrun optimization completes at RCL 5
+2. Full military capabilities available
+3. Control 2-3 high-quality rooms
+4. Abandon poor rooms automatically
+5. Extract resources from conquered rooms
+
+### **Performance Tips**
+
+**For Maximum Expansion:**
+- Set `CRITICAL_BUCKET_THRESHOLD = 500` (very aggressive)
+- Set `MAX_CONTROLLED_ROOMS = 3` (claim more rooms)
+- Set `AGGRESSIVE_SCOUT_RANGE = 4` (scout further)
+
+**For Maximum Efficiency:**
+- Set `MIN_BUCKET_RECOVERY_RATE = 200` (higher standard)
+- Set `CRITICAL_BUCKET_THRESHOLD = 3000` (more conservative)
+- Set `MAX_CONTROLLED_ROOMS = 2` (fewer rooms)
+
+**For Pixel Farming:**
+- Focus on high recovery rate (200+/tick)
+- Control 1-2 high-quality rooms
+- Monitor pixel generation rate in console
+- Bucket will fluctuate 0-10000 (normal!)
+
+### **Memory Inspection**
+
+Check tactical status in console:
+```javascript
+// CPU stats
+Memory.strategic.cpuStats.averageBucketRecovery
+
+// Room intelligence
+Memory.strategic.roomIntelligence
+
+// Active assaults
+Memory.strategic.militaryOperations.activeAssaults
+
+// Conquest history
+Memory.strategic.militaryOperations.conquestHistory
+
+// Controlled rooms
+Memory.strategic.controlledRooms
+```
+
 ## 📝 **Version History**
+
+### **v1.3.0** (October 10, 2025) - Tactical Aggression & Expansion
+- **Military Operations System**: Complete tactical warfare capabilities
+  - New creep roles: Warrior, Healer, Dismantler, Raider
+  - Phased assault system: Prepare → Assault → Raid → Complete
+  - Automatic target selection and conquest coordination
+  - Resource extraction from conquered rooms
+- **Room Intelligence System**: Automatic analysis of all visible rooms
+  - Threat assessment (0-10 scale) based on towers, spawns, creeps, RCL
+  - Strategic value scoring for conquest prioritization
+  - Continuous intelligence updates every 10 ticks
+- **Aggressive Reconnaissance**: Scout 3 rooms out in all directions
+  - Automatic target queue management
+  - Re-scouting every 1000 ticks for fresh intelligence
+  - Military intelligence gathering
+- **CPU Management Philosophy**: Recovery rate-focused approach
+  - Monitors bucket/tick recovery rate (target: 150+/tick)
+  - Pixel generation compatible (works at bucket = 0)
+  - Aggressive stance: only stops military when bucket < 1000
+  - Three warning levels with detailed console output
+- **Room Abandonment Logic**: Quality-based room evaluation
+  - Automatic abandonment of rooms scoring < 500
+  - Safety checks prevent over-abandonment
+  - Resource extraction before abandoning
+- **RCL 5 Speedrun Optimization**: Rapid progression system
+  - Boosts upgraders to 15 when below RCL 5
+  - Activates with storage > 50k or spawn > 70% full
+  - Builder reduction when construction backlog low
+- **Multi-Room Control**: Manages up to 3 controlled rooms simultaneously
+- **Enhanced Status Dashboard**: Comprehensive tactical status display
+  - CPU efficiency indicators (✅⚠️🚨)
+  - Military population counts
+  - Active assault tracking
+  - Intelligence summary
+  - Speedrun progress indicator
+- **Configuration Constants**: 15+ tunable settings for tactical behavior
+  - Military switches (enable/disable, RCL requirements)
+  - CPU thresholds (recovery rates, bucket levels)
+  - Conquest parameters (cooldowns, requirements)
+  - Abandonment criteria
 
 ### **v1.2.1** (October 4, 2025) - Hauler Efficiency & Scout Improvements
 - **Hauler Efficiency Improvements**:
@@ -510,4 +946,16 @@ The bot automatically scouts, evaluates, and harvests energy from adjacent rooms
 
 ---
 
-*This bot implements advanced throughput mathematics and competitive optimizations for players who want maximum efficiency in a single-room Pixel-earning machine that requires minimal maintenance and operates completely autonomously.*
+## 📚 **Additional Documentation**
+
+- **`V1.3_QUICK_REFERENCE.md`**: Quick reference guide with commands, troubleshooting, and configuration
+- **`CHANGELOG_v1.3.md`**: Detailed v1.3 feature documentation and technical details
+- **`CPU_MANAGEMENT.md`**: In-depth explanation of the recovery-rate focused CPU philosophy
+- **`UPLOAD_README.md`**: Complete guide for uploading code to Screeps using the included script
+- **`screeps-mcp/README.md`**: Full MCP server documentation with all 13 tools
+- **`screeps-mcp/QUICK_START.md`**: 5-minute MCP setup guide
+- **`screeps-mcp/API_REFERENCE.md`**: Complete Screeps API reference
+
+---
+
+*This bot implements advanced throughput mathematics, aggressive tactical expansion, and competitive optimizations for players who want an autonomous, multi-room empire that conquers neighbors, extracts resources, and earns pixels efficiently with minimal maintenance.*
