@@ -1,0 +1,33 @@
+{
+  "name": "screeps-mcp",
+  "version": "1.0.0",
+  "description": "Model Context Protocol server for Screeps - upload code, monitor console, troubleshoot bots",
+  "type": "module",
+  "main": "index.js",
+  "bin": {
+    "screeps-mcp": "./index.js"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js",
+    "test": "node test-connection.js"
+  },
+  "keywords": [
+    "screeps",
+    "mcp",
+    "model-context-protocol",
+    "bot",
+    "automation"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^0.5.0",
+    "axios": "^1.6.0",
+    "dotenv": "^16.0.0",
+    "screeps-api": "^1.16.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

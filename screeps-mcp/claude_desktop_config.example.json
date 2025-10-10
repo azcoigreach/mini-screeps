@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "screeps": {
+      "command": "node",
+      "args": [
+        "/home/azcoigreach/repos/mini-screeps/screeps-mcp/index.js"
+      ],
+      "env": {
+        "SCREEPS_TOKEN": "your_screeps_auth_token_here",
+        "SCREEPS_SERVER": "https://screeps.com",
+        "SCREEPS_BRANCH": "default"
+      }
+    }
+  }
+}
+
+
