@@ -98,6 +98,9 @@ const RAMPART_TARGET_HITS = {
 const CONTAINER_REPAIR_THRESHOLD = 20000; // absolute hits threshold
 const CONTAINER_REPAIR_PERCENT = 0.5; // repair if below 50% of hitsMax
 
+// Road repair configuration: roads decay quickly and need frequent maintenance
+const ROAD_REPAIR_PERCENT = 0.8; // repair roads when below 80% of hitsMax (240k/300k)
+
 // Tower refill threshold: haulers will only refill towers when their energy
 // is below this fraction of capacity, or when hostiles are present.
 const TOWER_REFILL_THRESHOLD = 0.5; // 50%
@@ -1298,6 +1301,13 @@ function createInitialDefensiveStructures(room) {
     );
     
     for (const planned of defensiveStructures) {
+        // Validate coordinates before creating RoomPosition
+        if (typeof planned.x !== 'number' || typeof planned.y !== 'number' || 
+            planned.x < 0 || planned.x > 49 || planned.y < 0 || planned.y > 49) {
+            console.log(`❌ Invalid coordinates for ${planned.type}: x=${planned.x}, y=${planned.y} - skipping`);
+            continue;
+        }
+        
         const pos = new RoomPosition(planned.x, planned.y, room.name);
         
         // Check if structure or construction site already exists
@@ -1315,6 +1325,8 @@ function createInitialDefensiveStructures(room) {
                 } else {
                     rampartsCreated++;
                 }
+            } else {
+                console.log(`❌ Failed to create ${planned.type} at (${pos.x},${pos.y}): ${result}`);
             }
         }
     }
@@ -2079,23 +2091,43 @@ function getPopulationByRCL(rcl) {
     
     // Version 1.3: RCL 5 Speed Run Optimization
     // Boost upgraders when below target RCL for aggressive progression
+    // BUT: Only if CPU can handle it!
     if (rcl < SPEEDRUN_TARGET_RCL) {
         // Calculate how much energy we can throw at the controller
         const storageEnergy = storage ? storage.store[RESOURCE_ENERGY] : 0;
         
-        if (storageEnergy > 50000 || (energyPercent > 0.7 && energyCapacity >= 800)) {
-            // We have energy to spare - boost upgraders significantly
+        // Check CPU efficiency before speedrunning
+        const cpuRecovery = Memory.strategic && Memory.strategic.cpuStats ? 
+                           (Memory.strategic.cpuStats.averageBucketRecovery || 0) : 0;
+        const canAffordSpeedrun = cpuRecovery >= MIN_BUCKET_RECOVERY_RATE || cpuRecovery === 0; // 0 means not initialized yet
+        
+        if (canAffordSpeedrun && (storageEnergy > 50000 || (energyPercent > 0.7 && energyCapacity >= 800))) {
+            // We have energy to spare AND CPU can handle it - boost upgraders
             const speedrunUpgraders = Math.min(15, Math.floor(energyCapacity / 150) + 3);
             upgradersNeeded = Math.max(upgradersNeeded, speedrunUpgraders);
             
             if (Game.time % 100 === 0) {
                 console.log(`🚀 SPEEDRUN MODE: Boosting upgraders to ${upgradersNeeded} (Target: RCL ${SPEEDRUN_TARGET_RCL})`);
             }
+        } else if (!canAffordSpeedrun && cpuRecovery > 0) {
+            // CPU is struggling - scale back upgraders
+            upgradersNeeded = Math.max(2, Math.min(upgradersNeeded, 5));
+            if (Game.time % 100 === 0) {
+                console.log(`⚠️ CPU THROTTLE: Limiting upgraders to ${upgradersNeeded} (Recovery: ${cpuRecovery.toFixed(1)}/tick)`);
+            }
         }
         
-        // Reduce builders slightly during speedrun to focus on upgrading
-        if (constructionSitesCount < 10 && rcl >= 3) {
+        // DON'T reduce builders when roads need maintenance or many construction sites
+        // Only reduce if < 5 construction sites AND no deteriorating roads
+        const roadsNeedingRepair = room.find(FIND_STRUCTURES, {
+            filter: s => s.structureType === STRUCTURE_ROAD && s.hits < s.hitsMax * ROAD_REPAIR_PERCENT
+        }).length;
+        
+        if (constructionSitesCount < 5 && roadsNeedingRepair === 0 && rcl >= 3) {
             buildersNeeded = Math.max(1, buildersNeeded - 1);
+        } else if (constructionSitesCount >= 5 || roadsNeedingRepair > 10) {
+            // Need more builders for construction or road maintenance
+            buildersNeeded = Math.max(2, buildersNeeded);
         }
     }
 
@@ -2341,6 +2373,13 @@ function createMissingConstructionSites(room) {
         // Skip roads until we have essential structures built
         if (planned.type === STRUCTURE_ROAD && !shouldBuildRoads) {
             roadsSkipped++;
+            continue;
+        }
+        
+        // Validate coordinates before creating RoomPosition
+        if (typeof planned.x !== 'number' || typeof planned.y !== 'number' || 
+            planned.x < 0 || planned.x > 49 || planned.y < 0 || planned.y > 49) {
+            console.log(`❌ Invalid coordinates for ${planned.type}: x=${planned.x}, y=${planned.y} - skipping`);
             continue;
         }
         
@@ -3010,6 +3049,9 @@ function runHauler(creep) {
     } else {
         // Pick up energy from source containers or dropped energy
         // Priority: local sources > remote sources
+        if (Game.time % 50 === 0) {
+            console.log(`🔧 Builder ${creep.name}: No energy (${creep.store[RESOURCE_ENERGY]}/${creep.store.getCapacity()}), looking for energy sources`);
+        }
         
         // Store home room name
         if (!creep.memory.homeRoom) {
@@ -3970,8 +4012,17 @@ function getStructuresNeedingRepair(room) {
         // Ramparts protecting critical structures
         if (structure.structureType === STRUCTURE_RAMPART) return 8;
         
-        // Roads
-        if (structure.structureType === STRUCTURE_ROAD) return 9;
+        // Roads - HIGHER PRIORITY! They decay constantly
+        if (structure.structureType === STRUCTURE_ROAD) {
+            // Critical roads (spawn/source/controller paths) get higher priority
+            const spawn = room.find(FIND_MY_SPAWNS)[0];
+            const sources = room.find(FIND_SOURCES);
+            const controller = room.controller;
+            const isCriticalRoad = spawn && structure.pos.getRangeTo(spawn) <= 5 ||
+                                   sources.some(s => structure.pos.getRangeTo(s) <= 5) ||
+                                   controller && structure.pos.getRangeTo(controller) <= 5;
+            return isCriticalRoad ? 5 : 9; // Critical roads priority 5, others priority 9
+        }
         
         // Everything else
         return 10;
@@ -4007,8 +4058,14 @@ function runBuilder(creep) {
             isRepairTask = creep.memory.isRepairTask || false;
             // If the target no longer exists, clear assignment
             if (!target) {
+                console.log(`🔧 Builder ${creep.name}: Target ${creep.memory.buildTarget} no longer exists, clearing assignment`);
                 delete creep.memory.buildTarget;
                 delete creep.memory.isRepairTask;
+            } else {
+                // Debug: Log target info
+                if (Game.time % 50 === 0) {
+                    console.log(`🔧 Builder ${creep.name}: Target ${target.structureType} at ${target.pos.x},${target.pos.y} (${isRepairTask ? 'REPAIR' : 'BUILD'})`);
+                }
             }
         }
         
@@ -4036,7 +4093,7 @@ function runBuilder(creep) {
             // Second priority: Roads needing repair (decay over time)
             if (!target) {
                 const roads = creep.room.find(FIND_STRUCTURES, {
-                    filter: s => s.structureType === STRUCTURE_ROAD && s.hits < s.hitsMax * 0.5
+                    filter: s => s.structureType === STRUCTURE_ROAD && s.hits < s.hitsMax * ROAD_REPAIR_PERCENT
                 });
                 if (roads.length > 0) {
                     // Repair roads near spawn, sources, or controller first
@@ -4097,7 +4154,10 @@ function runBuilder(creep) {
             }
             
             if (actionResult === ERR_NOT_IN_RANGE) {
-                creep.moveTo(target, { visualizePathStyle: { stroke: '#ffffff' } });
+                const moveResult = creep.moveTo(target, { visualizePathStyle: { stroke: '#ffffff' } });
+                if (Game.time % 50 === 0) {
+                    console.log(`🔧 Builder ${creep.name}: Moving to ${target.structureType} at ${target.pos.x},${target.pos.y}, move result: ${moveResult}`);
+                }
             } else if (actionResult === OK) {
                 // Check if repair target is now at target hits
                 if (isRepairTask) {
@@ -4155,6 +4215,10 @@ function runBuilder(creep) {
                 return resource.resourceType === RESOURCE_ENERGY && resource.amount >= 50;
             }
         });
+        
+        if (Game.time % 50 === 0) {
+            console.log(`🔧 Builder ${creep.name}: Found ${allDropped.length} dropped energy sources in room`);
+        }
 
         let target = null;
         if (allDropped.length > 0) {
@@ -4189,7 +4253,10 @@ function runBuilder(creep) {
         if (target) {
             const pickupResult = creep.pickup(target);
             if (pickupResult === ERR_NOT_IN_RANGE) {
-                creep.moveTo(target, { visualizePathStyle: { stroke: '#ffaa00' } });
+                const moveResult = creep.moveTo(target, { visualizePathStyle: { stroke: '#ffaa00' } });
+                if (Game.time % 50 === 0) {
+                    console.log(`🔧 Builder ${creep.name}: Moving to energy at ${target.pos.x},${target.pos.y}, move result: ${moveResult}`);
+                }
             } else if (pickupResult === OK) {
                 // After picking up ground energy, if we still have free capacity,
                 // try to top up from a nearby source container (<=2 tiles).
